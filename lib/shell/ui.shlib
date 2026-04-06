@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# ui.shlib — human output formatting helpers for apm
+
+apm_info() {
+    if [ "${APM_JSON_MODE:-0}" != "1" ]; then
+        echo "  $*"
+    fi
+}
+
+apm_ok() {
+    if [ "${APM_JSON_MODE:-0}" != "1" ]; then
+        echo "  ok: $*"
+    fi
+}
+
+apm_warn() {
+    if [ "${APM_JSON_MODE:-0}" != "1" ]; then
+        echo "  !  $*"
+    fi
+}
+
+apm_err() {
+    echo "error: $*" >&2
+}
+
+apm_die() {
+    local code="$1"
+    shift
+    apm_err "$*"
+    exit "$code"
+}
+
+apm_header() {
+    if [ "${APM_JSON_MODE:-0}" != "1" ]; then
+        echo ""
+        echo "=== $* ==="
+        echo ""
+    fi
+}

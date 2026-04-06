@@ -1,0 +1,2213 @@
+#!/usr/bin/env bash
+# apm — local-first package manager for AI agent prompt files
+# See PLAN.md and SPEC_*.md for full specification
+
+set -uo pipefail
+
+# Resolve script location for lib paths (follow symlinks so lib/ is found correctly)
+_apm_src="${BASH_SOURCE[0]}"
+while [ -L "$_apm_src" ]; do _apm_src="$(readlink "$_apm_src")"; done
+APM_SCRIPT_DIR="$(cd "$(dirname "$_apm_src")" && pwd)"
+unset _apm_src
+APM_LIB_SHELL="${APM_SCRIPT_DIR}/lib/shell"
+APM_LIB_PY="${APM_SCRIPT_DIR}/lib/py"
+
+# Source shell libraries
+source "${APM_LIB_SHELL}/ui.shlib"
+source "${APM_LIB_SHELL}/config.shlib"
+source "${APM_LIB_SHELL}/locks.shlib"
+source "${APM_LIB_SHELL}/fs.shlib"
+
+# ---------------------------------------------------------------------------
+# Dependency checks
+# ---------------------------------------------------------------------------
+
+_apm_check_deps() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        apm_die 3 "python3 is required but not found. Please install Python 3."
+    fi
+
+    if ! python3 -c "import yaml" 2>/dev/null; then
+        apm_die 3 "PyYAML is required but not installed. Run: pip3 install pyyaml"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Python helper invocation
+# ---------------------------------------------------------------------------
+
+# Call the Python helper and return its output.
+# Shell passes structured args; Python returns JSON.
+_apm_py() {
+    python3 "${APM_LIB_PY}/apm_python.py" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Global flag parsing
+# ---------------------------------------------------------------------------
+
+_CLI_DB=""
+_CLI_PLATFORM=""
+APM_JSON_MODE=0
+APM_DRY_RUN=0
+APM_FORCE=0
+
+_apm_parse_global_flags() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --db)
+                [ $# -lt 2 ] && apm_die 2 "--db requires a value"
+                _CLI_DB="$2"; shift 2 ;;
+            --platform)
+                [ $# -lt 2 ] && apm_die 2 "--platform requires a value"
+                _CLI_PLATFORM="$2"; shift 2 ;;
+            --json)     APM_JSON_MODE=1; export APM_JSON_MODE; shift ;;
+            --dry-run)  APM_DRY_RUN=1; shift ;;
+            --force)    APM_FORCE=1; shift ;;
+            *)          break ;;
+        esac
+    done
+    # Return remaining args by storing in global array
+    _REMAINING_ARGS=("$@")
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+cmd_setup() {
+    apm_acquire_lock "config"
+    apm_setup_wizard
+    local _wizard_status=$?
+    apm_release_lock "config"
+    return $_wizard_status
+}
+
+cmd_config() {
+    if [ "$APM_JSON_MODE" -eq 1 ]; then
+        python3 -c "
+import json, sys
+print(json.dumps({
+    'agents_db':       '${APM_AGENTS_DB}',
+    'platform':        '${APM_PLATFORM}',
+    'runtime_dir':     '${APM_RUNTIME_DIR}',
+    'claude_agents':   '${APM_CLAUDE_AGENTS}',
+    'cursor_rules':    '${APM_CURSOR_RULES}',
+    'generic_export':  '${APM_GENERIC_EXPORT}',
+    'github_mode':     '${APM_GITHUB_MODE}',
+    'github_owner':    '${APM_GITHUB_OWNER}',
+    'github_monorepo': '${APM_GITHUB_MONOREPO}',
+    'github_branch':   '${APM_GITHUB_BRANCH}',
+    'config_file':     '${_APM_CONFIG_FILE}',
+}, indent=2))
+"
+        return 0
+    fi
+
+    echo ""
+    echo "Config file : ${_APM_CONFIG_FILE}"
+    echo ""
+    echo "  Platform        : ${APM_PLATFORM}"
+    echo "  Library (db)    : ${APM_AGENTS_DB:-<not set>}"
+    echo "  Runtime dir     : ${APM_RUNTIME_DIR:-<not set>}"
+    echo ""
+    echo "  Claude agents   : ${APM_CLAUDE_AGENTS}"
+    echo "  Cursor rules    : ${APM_CURSOR_RULES}"
+    echo "  Generic export  : ${APM_GENERIC_EXPORT}"
+    echo ""
+    if [ -n "${APM_GITHUB_MODE}" ]; then
+        echo "  GitHub mode     : ${APM_GITHUB_MODE}"
+        echo "  GitHub owner    : ${APM_GITHUB_OWNER}"
+        [ -n "${APM_GITHUB_MONOREPO}" ] && echo "  GitHub monorepo : ${APM_GITHUB_MONOREPO}"
+        echo "  GitHub branch   : ${APM_GITHUB_BRANCH}"
+    else
+        echo "  GitHub sync     : disabled"
+    fi
+    echo ""
+}
+
+cmd_validate() {
+    local id="${1:-}"
+
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    if [ -n "$id" ]; then
+        _apm_py validate-agent --id "$id" --db "$APM_AGENTS_DB"
+        return $?
+    else
+        _apm_py validate-all --db "$APM_AGENTS_DB"
+        return $?
+    fi
+}
+
+cmd_list() {
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    local out
+    out=$(_apm_py status-agents \
+        --db "$APM_AGENTS_DB" \
+        --platform "$APM_PLATFORM" \
+        --runtime-dir "$APM_RUNTIME_DIR")
+    local exit_code=$?
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        echo "$out"
+        return $exit_code
+    fi
+
+    # Human-readable output matching TUI.md §9
+    echo ""
+    printf "  %-14s : %s\n" "Platform" "$APM_PLATFORM"
+    printf "  %-14s : %s\n" "Library" "$APM_AGENTS_DB"
+    [ -n "$APM_GITHUB_MODE" ] && printf "  %-14s : %s\n" "GitHub mode" "$APM_GITHUB_MODE"
+    echo ""
+    echo "$out" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+agents = data.get('agents', [])
+
+# Sort order per TUI.md §9: collision, untracked, outdated, ready, orphan, in-sync, no-deploy
+ORDER = {
+    'collision': 0, 'unmanaged': 1, 'outdated': 2,
+    'ready': 3, 'orphan': 4, 'in-sync': 5, 'no-deploy': 6,
+}
+agents.sort(key=lambda a: ORDER.get(a.get('state',{}).get('sync',''), 99))
+
+symbols = {
+    'in-sync':           '  ✓',
+    'outdated':          '  ~',
+    'ready':             '  ○',
+    'no-deploy':         '  -',
+    'orphan':            '  ?',
+    'unmanaged': '  !',
+    'collision':         '  x',
+}
+
+tty = sys.stdout.isatty()
+C = {
+    'green':  '\033[32m'  if tty else '',
+    'yellow': '\033[33m'  if tty else '',
+    'cyan':   '\033[36m'  if tty else '',
+    'red':    '\033[31m'  if tty else '',
+    'bold':   '\033[1m'   if tty else '',
+    'dim':    '\033[2m'   if tty else '',
+    'reset':  '\033[0m'   if tty else '',
+}
+STATE_COLOR = {
+    'in-sync':           C['green'],
+    'outdated':          C['yellow'],
+    'ready':             C['cyan'],
+    'unmanaged': C['yellow'],
+    'orphan':            C['red'],
+    'collision':         C['bold'] + C['red'],
+    'no-deploy':         C['dim'],
+}
+if not agents:
+    print('  (no agents found)')
+else:
+    show_cat = any(a.get('category') for a in agents)
+    for a in agents:
+        sync  = a.get('state', {}).get('sync', '?')
+        aid   = a.get('id', '?')
+        cat   = a.get('category', '') or ''
+        sym   = symbols.get(sync, '  ?')
+        color = STATE_COLOR.get(sync, '')
+        reset = C['reset'] if color else ''
+        cat_col = f'  {cat:<16}' if show_cat else ''
+        print(f'{color}{sym}  {aid:<28}{cat_col}  {sync}{reset}')
+"
+    echo ""
+    return $exit_code
+}
+
+cmd_status() {
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    local out
+    out=$(_apm_py status-agents \
+        --db "$APM_AGENTS_DB" \
+        --platform "$APM_PLATFORM" \
+        --runtime-dir "$APM_RUNTIME_DIR")
+    local exit_code=$?
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        echo "$out"
+        return $exit_code
+    fi
+
+    # Human-readable summary matching TUI.md §8
+    echo ""
+    printf "  %-14s : %s\n" "Platform" "$APM_PLATFORM"
+    printf "  %-14s : %s\n" "Library" "$APM_AGENTS_DB"
+    [ -n "$APM_GITHUB_MODE" ] && printf "  %-14s : %s\n" "GitHub mode" "$APM_GITHUB_MODE"
+    echo ""
+    echo "$out" | python3 -c "
+import json, sys
+from collections import Counter
+data = json.load(sys.stdin)
+agents = data.get('agents', [])
+counts = Counter(a.get('state',{}).get('sync','?') for a in agents)
+order = ['collision','unmanaged','outdated','ready','orphan','in-sync','no-deploy']
+
+tty = sys.stdout.isatty()
+C = {
+    'green':  '\033[32m'  if tty else '',
+    'yellow': '\033[33m'  if tty else '',
+    'cyan':   '\033[36m'  if tty else '',
+    'red':    '\033[31m'  if tty else '',
+    'bold':   '\033[1m'   if tty else '',
+    'dim':    '\033[2m'   if tty else '',
+    'reset':  '\033[0m'   if tty else '',
+}
+STATE_COLOR = {
+    'in-sync':           C['green'],
+    'outdated':          C['yellow'],
+    'ready':             C['cyan'],
+    'unmanaged': C['yellow'],
+    'orphan':            C['red'],
+    'collision':         C['bold'] + C['red'],
+    'no-deploy':         C['dim'],
+}
+for state in order:
+    if state in counts:
+        color = STATE_COLOR.get(state, '')
+        reset = C['reset'] if color else ''
+        print(f'  {color}{state:<22}{reset}  {counts[state]}')
+for state in sorted(counts):
+    if state not in order:
+        print(f'  {state:<22}  {counts[state]}')
+"
+    echo ""
+    echo "  Run 'apm list' for per-agent details."
+    echo ""
+    return $exit_code
+}
+
+cmd_diff() {
+    local id="${1:-}"
+    if [ -z "$id" ]; then
+        apm_die 2 "Usage: apm diff <id>"
+    fi
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    local out
+    out=$(_apm_py diff-manifest \
+        --id "$id" \
+        --db "$APM_AGENTS_DB" \
+        --platform "$APM_PLATFORM" \
+        --runtime-dir "$APM_RUNTIME_DIR")
+    local py_exit=$?
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        echo "$out"
+        return $py_exit
+    fi
+
+    # Human-readable diff matching TUI.md §10
+    echo ""
+    echo "$out" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+aid      = data.get('id', '?')
+platform = data.get('platform', '?')
+in_sync  = data.get('in_sync', False)
+changed  = set(data.get('changed_fields', []))
+details  = data.get('details', {})
+
+tty = sys.stdout.isatty()
+green = '\033[32m' if tty else ''
+reset = '\033[0m'  if tty else ''
+
+print(f'  {aid}')
+print(f'  Platform: {platform}')
+print()
+
+if not data.get('runtime_exists', False):
+    print('  runtime file not installed')
+    print()
+    print(f\"  Next: run 'apm install {aid}' to install\")
+elif in_sync:
+    print(f'  {green}in-sync{reset}  — runtime matches library, all good')
+else:
+    all_fields = ['name', 'description', 'model', 'tools', 'body']
+    for f in all_fields:
+        if f in changed:
+            info = details.get(f, {})
+            if f == 'body':
+                lib_lines = info.get('library_lines', '?')
+                rt_lines  = info.get('runtime_lines', '?')
+                print(f'  {f:<14} : changed  ({lib_lines} lib lines / {rt_lines} runtime lines)')
+            elif isinstance(info, dict) and 'library' in info:
+                lib_v = str(info['library'])[:60]
+                rt_v  = str(info['runtime'])[:60]
+                print(f'  {f:<14} : changed')
+                print(f'    library  : {lib_v}')
+                print(f'    runtime  : {rt_v}')
+            else:
+                print(f'  {f:<14} : changed')
+        else:
+            print(f'  {f:<14} : in-sync')
+    print()
+    print(f\"  Next: run 'apm install {aid}' to update runtime\")
+print()
+"
+    # Exit 1 if diffs (spec: exit 1 = diff/validation result)
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('in_sync') else 1)" 2>/dev/null
+    return $?
+}
+
+cmd_install() {
+    local id="${1:-}"
+
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+    if [ -z "$APM_RUNTIME_DIR" ]; then
+        apm_die 2 "No runtime directory configured for platform: $APM_PLATFORM"
+    fi
+
+    # --cat <name>: install all agents in a category
+    if [ "$id" = "--cat" ]; then
+        local _cat="${2:-}"
+        [ -z "$_cat" ] && apm_die 2 "Usage: apm install --cat <category>"
+        local _cat_json _targets _count
+        _cat_json=$(_apm_py list-categories --db "$APM_AGENTS_DB")
+        _targets=$(echo "$_cat_json" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+ids = d.get('categories', {}).get('$_cat', [])
+for i in ids: print(i)
+" 2>/dev/null)
+        if [ -z "$_targets" ]; then
+            echo ""
+            echo "  No agents found in category: $_cat"
+            echo ""
+            return 0
+        fi
+        _count=$(echo "$_targets" | wc -l | tr -d ' ')
+        echo ""
+        echo "  Installing $_count agent(s) from category '$_cat':"
+        echo "$_targets" | while IFS= read -r aid; do echo "    $aid"; done
+        echo ""
+        if [ "$APM_DRY_RUN" = "1" ]; then
+            echo "  (dry run — nothing written)"
+            echo ""
+            return 0
+        fi
+        if [ "$APM_FORCE" != "1" ]; then
+            printf "  Proceed? [y/N] "
+            read -r _confirm
+            case "$_confirm" in
+                [yY]*) ;;
+                *) echo "  Cancelled."; echo ""; return 0 ;;
+            esac
+        fi
+        local _ok=0 _fail=0
+        while IFS= read -r aid; do
+            if cmd_install "$aid"; then
+                _ok=$((_ok + 1))
+            else
+                apm_warn "Failed to install $aid"
+                _fail=$((_fail + 1))
+            fi
+        done <<< "$_targets"
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            echo "{\"command\":\"install\",\"category\":\"$_cat\",\"installed\":$_ok,\"failed\":$_fail}"
+        fi
+        return $(( _fail > 0 ? 1 : 0 ))
+    fi
+
+    # Multiple IDs: apm install gino pino ...
+    if [ $# -gt 1 ] && [ "$id" != "--all" ]; then
+        local _multi_ok=0 _multi_fail=0
+        for _mid in "$@"; do
+            if cmd_install "$_mid"; then
+                _multi_ok=$((_multi_ok + 1))
+            else
+                _multi_fail=$((_multi_fail + 1))
+            fi
+        done
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            echo "{\"command\":\"install\",\"installed\":$_multi_ok,\"failed\":$_multi_fail}"
+        fi
+        return $(( _multi_fail > 0 ? 1 : 0 ))
+    fi
+
+    # --all: install every agent that is ready or outdated
+    if [ "$id" = "--all" ]; then
+        local status_json targets count
+        status_json=$(_apm_py status-agents \
+            --db "$APM_AGENTS_DB" \
+            --platform "$APM_PLATFORM" \
+            --runtime-dir "$APM_RUNTIME_DIR")
+        targets=$(echo "$status_json" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for a in d.get('agents',[]):
+    if a.get('state',{}).get('sync') in ('ready','outdated'):
+        print(a['id'])
+" 2>/dev/null)
+        if [ -z "$targets" ]; then
+            echo ""
+            echo "  All agents are already in-sync or not deployable."
+            echo ""
+            return 0
+        fi
+        count=$(echo "$targets" | wc -l | tr -d ' ')
+        echo ""
+        echo "  Installing $count agent(s):"
+        echo "$targets" | while IFS= read -r aid; do echo "    $aid"; done
+        echo ""
+        if [ "$APM_DRY_RUN" = "1" ]; then
+            echo "  (dry run — nothing written)"
+            echo ""
+            return 0
+        fi
+        if [ "$APM_FORCE" != "1" ]; then
+            printf "  Proceed? [y/N] "
+            read -r _confirm
+            case "$_confirm" in
+                [yY]*) ;;
+                *) echo "  Cancelled."; echo ""; return 0 ;;
+            esac
+        fi
+        local installed=0 failed=0
+        while IFS= read -r aid; do
+            if cmd_install "$aid"; then
+                installed=$((installed + 1))
+            else
+                apm_warn "Failed to install $aid"
+                failed=$((failed + 1))
+            fi
+        done <<< "$targets"
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            echo "{\"command\":\"install\",\"installed\":$installed,\"failed\":$failed}"
+        fi
+        return 0
+    fi
+
+    if [ -z "$id" ]; then
+        apm_die 2 "Usage: apm install <id|--all>"
+    fi
+
+    # Build manifest to get all resolved paths and deploy config
+    local manifest
+    manifest=$(_apm_py build-manifest \
+        --id "$id" \
+        --db "$APM_AGENTS_DB" \
+        --platform "$APM_PLATFORM" \
+        --runtime-dir "$APM_RUNTIME_DIR")
+
+    # Extract fields from manifest using Python
+    local active_body deploy_name deploy_enabled runtime_file
+    active_body=$(echo "$manifest" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['paths']['active_body_file'])")
+    deploy_name=$(echo "$manifest" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['deploy'].get('name',''))")
+    deploy_enabled=$(echo "$manifest" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['deploy'].get('enabled',False))")
+    runtime_file=$(echo "$manifest" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['paths']['runtime_file'])")
+
+    if [ "$deploy_enabled" = "False" ]; then
+        apm_die 1 "Agent '$id' has no deploy config for platform '$APM_PLATFORM'. Add a deploy.$APM_PLATFORM block to ${id}.md"
+    fi
+
+    if [ -z "$active_body" ] || [ ! -f "$active_body" ]; then
+        # Fall back: body is in root file
+        active_body="${APM_AGENTS_DB}/${id}/${id}.md"
+        if [ ! -f "$active_body" ]; then
+            apm_die 2 "Cannot find agent body for '$id'. Expected: $active_body"
+        fi
+    fi
+
+    if [ -z "$runtime_file" ]; then
+        apm_die 2 "Cannot resolve runtime file path for '$id'"
+    fi
+
+    # Show what we're doing (TUI.md §11)
+    echo ""
+    printf "  %-10s : %s\n" "Installing" "$id"
+    printf "  %-10s : %s\n" "Platform" "$APM_PLATFORM"
+    [ "$deploy_name" != "$id" ] && [ -n "$deploy_name" ] && printf "  %-10s : %s\n" "Alias" "$deploy_name"
+    printf "  %-10s : %s\n" "Source" "$active_body"
+    printf "  %-10s : %s\n" "Target" "$runtime_file"
+    echo ""
+
+    # --dry-run: show only, don't write
+    if [ "$APM_DRY_RUN" = "1" ]; then
+        echo "  (dry run — nothing written)"
+        echo ""
+        return 0
+    fi
+
+    # Acquire lock for runtime platform
+    apm_acquire_lock "runtime-${APM_PLATFORM}"
+
+    # Ensure runtime dir exists
+    apm_ensure_dir "$APM_RUNTIME_DIR"
+
+    # Generate runtime file content via Python helper
+    local runtime_content
+    runtime_content=$(_apm_py generate-runtime \
+        --id "$id" \
+        --db "$APM_AGENTS_DB" \
+        --platform "$APM_PLATFORM")
+
+    if echo "$runtime_content" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if 'error' not in d else 1)" 2>/dev/null; then
+        # Extract the file content string from JSON
+        local file_content
+        file_content=$(echo "$runtime_content" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['content'])")
+
+        # Write atomically via temp file (same filesystem as destination)
+        local tmpfile="${runtime_file}.apm.tmp.$$"
+        if ! printf '%s\n' "$file_content" > "$tmpfile"; then
+            rm -f "$tmpfile"
+            apm_release_lock "runtime-${APM_PLATFORM}"
+            apm_die 2 "Failed to write temp file for '$id'"
+        fi
+        if ! apm_write_atomic "$tmpfile" "$runtime_file"; then
+            rm -f "$tmpfile"
+            apm_release_lock "runtime-${APM_PLATFORM}"
+            apm_die 2 "Failed to install runtime file for '$id'"
+        fi
+    else
+        apm_release_lock "runtime-${APM_PLATFORM}"
+        echo "$runtime_content" >&2
+        apm_die 2 "Failed to generate runtime content for '$id'"
+    fi
+
+    apm_release_lock "runtime-${APM_PLATFORM}"
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        echo "$runtime_content" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(json.dumps({'command':'install','id':'$id','platform':'$APM_PLATFORM','runtime_file':'$runtime_file','success':True}))
+"
+    else
+        echo "  Done."
+        echo ""
+    fi
+}
+
+cmd_remove() {
+    local id="${1:-}"
+    if [ -z "$id" ]; then
+        apm_die 2 "Usage: apm remove <id>"
+    fi
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+    if [ -z "$APM_RUNTIME_DIR" ]; then
+        apm_die 2 "No runtime directory configured for platform: $APM_PLATFORM"
+    fi
+
+    # Build manifest to resolve runtime file path
+    local manifest
+    manifest=$(_apm_py build-manifest \
+        --id "$id" \
+        --db "$APM_AGENTS_DB" \
+        --platform "$APM_PLATFORM" \
+        --runtime-dir "$APM_RUNTIME_DIR")
+
+    local runtime_file sync_state
+    runtime_file=$(echo "$manifest" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['paths']['runtime_file'])")
+    sync_state=$(echo "$manifest" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['state']['sync'])")
+
+    if [ -z "$runtime_file" ] || [ ! -f "$runtime_file" ]; then
+        apm_die 2 "No installed runtime file found for '$id' on platform '$APM_PLATFORM'"
+    fi
+
+    # Show target (TUI.md §12)
+    echo ""
+    printf "  %-10s : %s\n" "Remove" "$id"
+    printf "  %-10s : %s\n" "Platform" "$APM_PLATFORM"
+    printf "  %-10s : %s\n" "Target" "$runtime_file"
+    echo ""
+
+    # Warn if runtime differs from library
+    if [ "$sync_state" = "outdated" ]; then
+        apm_warn "runtime differs from canonical library"
+        apm_warn "removal affects runtime only — library is unchanged"
+        echo ""
+    fi
+
+    # --dry-run: show only
+    if [ "$APM_DRY_RUN" = "1" ]; then
+        echo "  (dry run — nothing removed)"
+        echo ""
+        return 0
+    fi
+
+    # Confirm unless --force
+    if [ "$APM_FORCE" != "1" ]; then
+        printf "  Proceed? [y/N] "
+        read -r _confirm
+        case "$_confirm" in
+            [yY]*) ;;
+            *)
+                echo "  Cancelled."
+                echo ""
+                return 0
+                ;;
+        esac
+    fi
+
+    # Acquire lock and remove
+    apm_acquire_lock "runtime-${APM_PLATFORM}"
+    rm "$runtime_file" || {
+        apm_release_lock "runtime-${APM_PLATFORM}"
+        apm_die 2 "Failed to remove: $runtime_file"
+    }
+    apm_release_lock "runtime-${APM_PLATFORM}"
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        python3 -c "import json; print(json.dumps({'command':'remove','id':'$id','platform':'$APM_PLATFORM','runtime_file':'$runtime_file','success':True}))"
+    else
+        echo "  Removed."
+        echo ""
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Import helpers
+# ---------------------------------------------------------------------------
+
+# Ignore registry path
+_apm_ignore_file() {
+    echo "${APM_CONFIG_DIR:-${HOME}/.config/apm}/ignored-runtime.txt"
+}
+
+# Add a runtime file path to the ignore registry
+_apm_ignore_add() {
+    local platform="$1"
+    local fpath="$2"
+    local ignore_file
+    ignore_file=$(_apm_ignore_file)
+    mkdir -p "$(dirname "$ignore_file")"
+    echo "${platform}:${fpath}" >> "$ignore_file"
+}
+
+# Check if a path is ignored
+_apm_is_ignored() {
+    local platform="$1"
+    local fpath="$2"
+    local ignore_file
+    ignore_file=$(_apm_ignore_file)
+    [ -f "$ignore_file" ] || return 1
+    grep -qF "${platform}:${fpath}" "$ignore_file" 2>/dev/null
+}
+
+# Apply a staged import draft to the canonical library.
+# Backs up existing entry if library_exists=true.
+_apm_apply_draft() {
+    local stage_dir="$1"
+    local candidate_id="$2"
+    local library_exists="${3:-false}"
+
+    local agent_dir="${APM_AGENTS_DB}/${candidate_id}"
+
+    apm_acquire_lock "library"
+
+    if [ "$library_exists" = "true" ] && [ -d "$agent_dir" ]; then
+        # Back up existing canonical entry before replacing
+        local backup_path
+        backup_path=$(apm_backup_agent "$agent_dir") || {
+            apm_release_lock "library"
+            apm_die 2 "Backup failed for $agent_dir — aborting apply"
+        }
+        apm_info "Backed up existing entry to: $backup_path"
+    fi
+
+    # Create agent dir and copy staged content
+    apm_ensure_dir "$agent_dir" || { apm_release_lock "library"; apm_die 2 "Cannot create $agent_dir"; }
+    apm_ensure_dir "${agent_dir}/instructions" || { apm_release_lock "library"; apm_die 2 "Cannot create ${agent_dir}/instructions"; }
+
+    local root_src="${stage_dir}/${candidate_id}.md"
+    local latest_src_at="${stage_dir}/instructions/${candidate_id}@latest.md"
+    local latest_src_us="${stage_dir}/instructions/${candidate_id}_latest.md"
+
+    if [ -f "$root_src" ]; then
+        cp "$root_src" "${agent_dir}/${candidate_id}.md" || {
+            apm_release_lock "library"
+            apm_die 2 "Failed to copy root file to library"
+        }
+    fi
+    # Support both @latest.md (preferred) and _latest.md (legacy)
+    if [ -f "$latest_src_at" ]; then
+        cp "$latest_src_at" "${agent_dir}/instructions/${candidate_id}@latest.md" || {
+            apm_release_lock "library"
+            apm_die 2 "Failed to copy latest file to library"
+        }
+    elif [ -f "$latest_src_us" ]; then
+        cp "$latest_src_us" "${agent_dir}/instructions/${candidate_id}_latest.md" || {
+            apm_release_lock "library"
+            apm_die 2 "Failed to copy latest file to library"
+        }
+    fi
+
+    apm_release_lock "library"
+}
+
+# ---------------------------------------------------------------------------
+# Single-agent import flow
+# ---------------------------------------------------------------------------
+
+_apm_import_one() {
+    local runtime_file="$1"   # absolute path to runtime file
+
+    if [ ! -f "$runtime_file" ]; then
+        apm_die 2 "Runtime file not found: $runtime_file"
+    fi
+
+    # Check ignore registry
+    if _apm_is_ignored "$APM_PLATFORM" "$runtime_file"; then
+        apm_info "Skipping (ignored): $runtime_file"
+        return 0
+    fi
+
+    # Analyze the runtime file
+    local analysis
+    analysis=$(_apm_py analyze-import \
+        "$runtime_file" \
+        --db "$APM_AGENTS_DB" \
+        --platform "$APM_PLATFORM")
+
+    if echo "$analysis" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if 'error' not in d else 1)" 2>/dev/null; then
+        : # ok
+    else
+        local err
+        err=$(echo "$analysis" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('error','unknown error'))" 2>/dev/null)
+        apm_die 2 "Cannot analyze $runtime_file: $err"
+    fi
+
+    # Extract analysis fields
+    local candidate_id mode match_type library_exists
+    candidate_id=$(echo "$analysis" | python3 -c "import json,sys; print(json.load(sys.stdin)['candidate_id'])")
+    mode=$(echo "$analysis" | python3 -c "import json,sys; print(json.load(sys.stdin)['mode'])")
+    match_type=$(echo "$analysis" | python3 -c "import json,sys; print(json.load(sys.stdin)['match_type'])")
+    library_exists=$(echo "$analysis" | python3 -c "import json,sys; d=json.load(sys.stdin); print('true' if d['library_exists'] else 'false')")
+
+    # Show analysis to user (TUI.md §13)
+    echo ""
+    echo "  Source: $runtime_file"
+    echo ""
+    printf "  %-18s : %s\n" "Suggested mode" "$mode"
+    printf "  %-18s : %s\n" "Match" "$match_type"
+    printf "  %-18s : %s\n" "Candidate ID" "$candidate_id"
+    printf "  %-18s : %s\n" "Library entry" "$( [ "$library_exists" = "true" ] && echo "exists" || echo "not found")"
+
+    # Show diff summary if library entry exists
+    local diff_json
+    diff_json=$(echo "$analysis" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+diff=d.get('diff')
+if diff:
+    print(json.dumps(diff))
+else:
+    print('null')
+" 2>/dev/null)
+
+    if [ "$diff_json" != "null" ] && [ -n "$diff_json" ]; then
+        echo ""
+        echo "  Diff vs canonical library:"
+        echo "$diff_json" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+changed=d.get('changed_fields',[])
+if d.get('in_sync'):
+    print('    (in-sync — no changes)')
+elif not d.get('runtime_exists'):
+    print('    (runtime not found for diff)')
+else:
+    for f in changed:
+        info=d.get('details',{}).get(f,{})
+        if f=='body':
+            ll=info.get('library_lines','?')
+            rl=info.get('runtime_lines','?')
+            print(f'    body: {ll} lib lines / {rl} runtime lines differ')
+        else:
+            print(f'    {f}: changed')
+" 2>/dev/null
+    fi
+
+    echo ""
+
+    # For link-existing mode: don't build draft, just reinstall
+    if [ "$mode" = "link-existing" ]; then
+        echo "  Mode: link-existing"
+        echo "  The runtime file already has apm.id=$candidate_id."
+        echo "  Library content will be reinstalled to make runtime managed."
+        echo ""
+        if [ "$APM_FORCE" != "1" ]; then
+            printf "  Reinstall from library? [y/N] "
+            read -r _confirm
+            case "$_confirm" in
+                [yY]*) ;;
+                i|I) echo "  Skipped."; echo ""; return 0 ;;
+                x|X)
+                    _apm_ignore_add "$APM_PLATFORM" "$runtime_file"
+                    echo "  Ignored permanently."
+                    echo ""
+                    return 0
+                    ;;
+                *) echo "  Cancelled."; echo ""; return 0 ;;
+            esac
+        fi
+        cmd_install "$candidate_id"
+        return $?
+    fi
+
+    # Build staged draft
+    local timestamp
+    timestamp=$(date -u +%Y-%m-%d-%H%M)
+    local draft_json
+    draft_json=$(_apm_py build-import-draft \
+        "$runtime_file" \
+        --id "$candidate_id" \
+        --db "$APM_AGENTS_DB" \
+        --platform "$APM_PLATFORM" \
+        --timestamp "$timestamp")
+
+    if echo "$draft_json" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if 'error' not in d else 1)" 2>/dev/null; then
+        : # ok
+    else
+        local err
+        err=$(echo "$draft_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('error',''))")
+        apm_die 2 "Failed to build import draft: $err"
+    fi
+
+    local stage_dir
+    stage_dir=$(echo "$draft_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['stage_dir'])")
+    local root_file_path
+    root_file_path=$(echo "$draft_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['root_file_path'])")
+    local latest_file_path
+    latest_file_path=$(echo "$draft_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['latest_file_path'])")
+    local root_file_content
+    root_file_content=$(echo "$draft_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['root_file_content'])")
+    local latest_file_content
+    latest_file_content=$(echo "$draft_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['latest_file_content'])")
+
+    printf "  %-18s : %s\n" "Staging draft" "$stage_dir"
+    echo ""
+
+    if [ "$APM_DRY_RUN" = "1" ]; then
+        echo "  (dry run — staging draft not written, library not changed)"
+        echo ""
+        return 0
+    fi
+
+    # Write draft to staging
+    apm_ensure_dir "$stage_dir"
+    apm_ensure_dir "$(dirname "$latest_file_path")"
+    printf '%s' "$root_file_content" > "$root_file_path"
+    printf '%s' "$latest_file_content" > "$latest_file_path"
+
+    echo "  Draft written."
+    echo ""
+
+    # Prompt: apply, skip, or ignore
+    local apply_prompt
+    if [ "$mode" = "import-merge" ]; then
+        apply_prompt="Apply staged draft to canonical library (backs up existing)? [y/N/i=ignore] "
+    else
+        apply_prompt="Apply staged draft to canonical library? [y/N/i=ignore] "
+    fi
+
+    if [ "$APM_FORCE" = "1" ]; then
+        _apm_apply_draft "$stage_dir" "$candidate_id" "$library_exists"
+        apm_ok "Applied: ${APM_AGENTS_DB}/${candidate_id}/"
+    else
+        printf "  %s" "$apply_prompt"
+        read -r _confirm
+        case "$_confirm" in
+            [yY]*)
+                _apm_apply_draft "$stage_dir" "$candidate_id" "$library_exists"
+                apm_ok "Applied: ${APM_AGENTS_DB}/${candidate_id}/"
+                echo "  Staging draft kept at: $stage_dir"
+                ;;
+            i|I)
+                _apm_ignore_add "$APM_PLATFORM" "$runtime_file"
+                echo "  Added to ignore list."
+                ;;
+            *)
+                echo "  Staged draft kept at: $stage_dir"
+                echo "  Run 'apm import' again later or apply manually."
+                ;;
+        esac
+    fi
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
+# cmd_import — main import command
+# ---------------------------------------------------------------------------
+
+cmd_import() {
+    local target="${1:-}"
+    local do_all=0
+
+    # Parse import-specific flags
+    local _remaining=()
+    for arg in "$@"; do
+        case "$arg" in
+            --all) do_all=1 ;;
+            *)     _remaining+=("$arg") ;;
+        esac
+    done
+    [ ${#_remaining[@]} -gt 0 ] && target="${_remaining[0]}"
+
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+    if [ -z "$APM_RUNTIME_DIR" ]; then
+        apm_die 2 "No runtime directory configured for platform: $APM_PLATFORM"
+    fi
+
+    apm_ensure_dir "${APM_AGENTS_DB}/_imports"
+
+    if [ "$do_all" = "1" ]; then
+        # Scan runtime for all unmanaged files and offer to import each
+        apm_header "Import All  (platform: ${APM_PLATFORM})"
+
+        local scan_json
+        scan_json=$(_apm_py scan-unmanaged \
+            --runtime-dir "$APM_RUNTIME_DIR" \
+            --db "$APM_AGENTS_DB" \
+            --ignore-file "$(_apm_ignore_file)")
+
+        local unmanaged_count
+        unmanaged_count=$(echo "$scan_json" | python3 -c "
+import json,sys; d=json.load(sys.stdin); print(len(d.get('unmanaged',[])))
+")
+
+        if [ "$unmanaged_count" = "0" ]; then
+            apm_info "No unmanaged runtime agents found in $APM_RUNTIME_DIR"
+            echo ""
+            return 0
+        fi
+
+        apm_info "Found $unmanaged_count unmanaged runtime agent(s):"
+        echo "$scan_json" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for a in d.get('unmanaged',[]):
+    print('    ' + a['name'])
+"
+        echo ""
+
+        if [ "$APM_FORCE" != "1" ]; then
+            printf "  Import all? [y/N] "
+            read -r _confirm
+            case "$_confirm" in
+                [yY]*) ;;
+                *) echo "  Cancelled."; echo ""; return 0 ;;
+            esac
+        fi
+
+        # Import each unmanaged file
+        local files
+        files=$(echo "$scan_json" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for a in d.get('unmanaged',[]):
+    print(a['file'])
+")
+        while IFS= read -r fpath; do
+            [ -n "$fpath" ] || continue
+            echo "--- Importing: $(basename "$fpath") ---"
+            _apm_import_one "$fpath"
+        done <<< "$files"
+
+        return 0
+    fi
+
+    # Single import: target can be a filename stem, canonical ID, or full path
+    local runtime_file=""
+
+    if [ -n "$target" ]; then
+        # Resolve target to a file path
+        if [ -f "$target" ]; then
+            runtime_file="$(realpath "$target")"
+        elif [ -f "${APM_RUNTIME_DIR}/${target}.md" ]; then
+            runtime_file="${APM_RUNTIME_DIR}/${target}.md"
+        elif [ -f "${APM_RUNTIME_DIR}/${target}" ]; then
+            runtime_file="${APM_RUNTIME_DIR}/${target}"
+        else
+            apm_die 2 "Cannot find runtime file for '$target'. Looked in: $APM_RUNTIME_DIR"
+        fi
+    else
+        # No target: scan for unmanaged and show a menu
+        local scan_json
+        scan_json=$(_apm_py scan-unmanaged \
+            --runtime-dir "$APM_RUNTIME_DIR" \
+            --db "$APM_AGENTS_DB" \
+            --ignore-file "$(_apm_ignore_file)")
+
+        local unmanaged_count orphan_count
+        unmanaged_count=$(echo "$scan_json" | python3 -c "
+import json,sys; d=json.load(sys.stdin); print(len(d.get('unmanaged',[])+d.get('orphan',[])))
+")
+
+        if [ "$unmanaged_count" = "0" ]; then
+            apm_info "No unmanaged runtime agents found in $APM_RUNTIME_DIR"
+            apm_info "Use 'apm import --all' to scan or 'apm import <id>' to import a specific agent."
+            echo ""
+            return 0
+        fi
+
+        echo ""
+        apm_header "Unmanaged runtime agents  (platform: ${APM_PLATFORM})"
+        echo "$scan_json" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+items=d.get('unmanaged',[])+d.get('orphan',[])
+for i,a in enumerate(items,1):
+    label='orphan' if a.get('apm_id') else 'untracked'
+    print(f'  {i:2}.  {a[\"name\"]:<30}  {label}')
+"
+        echo ""
+        printf "  Select by number (or q to quit): "
+        read -r _sel
+        case "$_sel" in
+            q|Q|"") echo ""; return 0 ;;
+            *[!0-9]*) apm_die 2 "Invalid selection." ;;
+        esac
+
+        runtime_file=$(echo "$scan_json" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+items=d.get('unmanaged',[])+d.get('orphan',[])
+sel=int(sys.argv[1])-1
+if 0<=sel<len(items):
+    print(items[sel]['file'])
+" "$_sel" 2>/dev/null)
+
+        if [ -z "$runtime_file" ]; then
+            apm_die 2 "Invalid selection."
+        fi
+    fi
+
+    _apm_import_one "$runtime_file"
+}
+
+# ---------------------------------------------------------------------------
+# GitHub helpers
+# ---------------------------------------------------------------------------
+
+# Verify GitHub prerequisites (git available, auth plausibly configured)
+_apm_github_check_prereqs() {
+    if ! command -v git >/dev/null 2>&1; then
+        apm_die 3 "git is required but not found"
+    fi
+    if [ -z "$APM_GITHUB_OWNER" ]; then
+        apm_die 2 "GitHub owner not configured. Run: apm github connect"
+    fi
+    if [ -z "$APM_GITHUB_MONOREPO" ] && [ "${APM_GITHUB_MODE:-monorepo}" = "monorepo" ]; then
+        apm_die 2 "GitHub monorepo not configured. Run: apm github connect"
+    fi
+}
+
+# Resolve the repo URL for a given agent.
+# monorepo: always the single shared repo
+# per-agent: each agent has its own repo named after its canonical ID
+#
+# Test hook: _APM_TEST_REMOTE_OVERRIDE overrides the URL without hitting GitHub.
+#   monorepo mode  : set to the bare repo path directly
+#   per-agent mode : set to a colon-separated list of "agent_id:path" pairs
+#                    e.g. "git-mentor:/tmp/bare1 reviewer:/tmp/bare2"
+_apm_github_repo_url() {
+    local agent_id="${1:-}"
+    local mode="${APM_GITHUB_MODE:-monorepo}"
+
+    # Test override
+    if [ -n "${_APM_TEST_REMOTE_OVERRIDE:-}" ]; then
+        if [ "$mode" = "per-agent" ]; then
+            local _pair
+            for _pair in ${_APM_TEST_REMOTE_OVERRIDE}; do
+                local _key="${_pair%%:*}"
+                local _val="${_pair#*:}"
+                if [ "$_key" = "$agent_id" ]; then
+                    echo "$_val"; return
+                fi
+            done
+            apm_die 2 "No test remote override found for agent: $agent_id"
+        else
+            echo "${_APM_TEST_REMOTE_OVERRIDE}"; return
+        fi
+    fi
+
+    if [ "$mode" = "per-agent" ]; then
+        if [ -z "$agent_id" ]; then
+            apm_die 2 "per-agent mode requires an agent ID to resolve repo URL"
+        fi
+        # Per-agent root frontmatter may override repo name via github.repo field
+        local override=""
+        if [ -n "$APM_AGENTS_DB" ] && [ -f "${APM_AGENTS_DB}/${agent_id}/${agent_id}.md" ]; then
+            override=$(_apm_py parse-root "${APM_AGENTS_DB}/${agent_id}/${agent_id}.md" 2>/dev/null \
+                | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('frontmatter',{}).get('github',{}).get('repo',''))" 2>/dev/null || true)
+        fi
+        local repo_name="${override:-${agent_id}}"
+        echo "https://github.com/${APM_GITHUB_OWNER}/${repo_name}.git"
+    else
+        echo "https://github.com/${APM_GITHUB_OWNER}/${APM_GITHUB_MONOREPO}.git"
+    fi
+}
+
+# Clone a repo into a temp dir and print the temp dir path.
+# Caller must rm -rf the tmpdir when done.
+# $1 = agent_id (required for per-agent mode to determine which repo to clone)
+_apm_github_clone_tmp() {
+    local agent_id="${1:-}"
+    local branch="${APM_GITHUB_BRANCH:-main}"
+    local repo_url
+    repo_url=$(_apm_github_repo_url "$agent_id")
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    if ! git clone --depth 1 --branch "$branch" "$repo_url" "$tmpdir" 2>/dev/null; then
+        rm -rf "$tmpdir"
+        apm_die 2 "Failed to clone: $repo_url (branch: $branch)"
+    fi
+    echo "$tmpdir"
+}
+
+# Resolve the path inside a clone that corresponds to the agent content.
+# monorepo: clone/<agent_id>/  (agent lives in a subfolder)
+# per-agent: clone root         (agent files live at repo root)
+_apm_github_agent_dir() {
+    local clone_dir="$1"
+    local agent_id="$2"
+    local mode="${APM_GITHUB_MODE:-monorepo}"
+    if [ "$mode" = "per-agent" ]; then
+        echo "$clone_dir"
+    else
+        echo "${clone_dir}/${agent_id}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# cmd_github — GitHub subcommand dispatcher
+# ---------------------------------------------------------------------------
+
+cmd_github() {
+    local sub="${1:-}"
+    shift || true
+
+    case "$sub" in
+        connect) _apm_github_connect "$@" ;;
+        status)  _apm_github_status  "$@" ;;
+        diff)    _apm_github_diff    "$@" ;;
+        push)    _apm_github_push    "$@" ;;
+        pull)    _apm_github_pull    "$@" ;;
+        "")
+            apm_die 2 "Usage: apm github <connect|status|diff|push|pull>"
+            ;;
+        *)
+            apm_die 2 "Unknown github subcommand: $sub"
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# apm github connect — configure GitHub sync settings
+# ---------------------------------------------------------------------------
+
+_apm_github_connect() {
+    apm_acquire_lock "config"
+
+    echo ""
+    apm_header "GitHub Connect"
+    echo ""
+
+    local _mode _owner _monorepo _branch
+
+    printf "  GitHub mode [monorepo/per-agent] (${APM_GITHUB_MODE:-monorepo}): "
+    read -r _mode
+    _mode="${_mode:-${APM_GITHUB_MODE:-monorepo}}"
+
+    printf "  GitHub owner or org: "
+    read -r _owner
+    _owner="${_owner:-${APM_GITHUB_OWNER:-}}"
+
+    if [ "$_mode" = "monorepo" ]; then
+        printf "  Monorepo name [${APM_GITHUB_MONOREPO:-agents}]: "
+        read -r _monorepo
+        _monorepo="${_monorepo:-${APM_GITHUB_MONOREPO:-agents}}"
+    fi
+
+    printf "  Default branch [${APM_GITHUB_BRANCH:-main}]: "
+    read -r _branch
+    _branch="${_branch:-${APM_GITHUB_BRANCH:-main}}"
+
+    # Update config file, preserving existing lines and replacing GitHub vars
+    local cfg="${APM_CONFIG_DIR:-${HOME}/.config/apm}/config.sh"
+    if [ ! -f "$cfg" ]; then
+        apm_release_lock "config"
+        apm_die 2 "No config file found. Run: apm setup first"
+    fi
+
+    # Write updated config: replace existing GITHUB_* lines or append them
+    local tmpfile="${cfg}.apm.tmp.$$"
+    # Remove existing GITHUB lines, then append new ones
+    grep -v '^GITHUB_' "$cfg" > "$tmpfile" || true
+    cat >> "$tmpfile" <<EOF
+GITHUB_MODE="${_mode}"
+GITHUB_OWNER="${_owner}"
+GITHUB_MONOREPO="${_monorepo:-}"
+GITHUB_BRANCH="${_branch}"
+EOF
+    apm_write_atomic "$tmpfile" "$cfg" || {
+        rm -f "$tmpfile"
+        apm_release_lock "config"
+        apm_die 2 "Failed to update config"
+    }
+
+    apm_release_lock "config"
+
+    echo ""
+    apm_ok "GitHub settings saved."
+    printf "  %-12s : %s\n" "Mode"   "$_mode"
+    printf "  %-12s : %s\n" "Owner"  "$_owner"
+    [ "$_mode" = "monorepo" ] && printf "  %-12s : %s\n" "Monorepo" "${_monorepo:-agents}"
+    printf "  %-12s : %s\n" "Branch" "$_branch"
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
+# apm github status — show per-agent GitHub sync state
+# ---------------------------------------------------------------------------
+
+_apm_github_status() {
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    # If GitHub is not configured, show not-configured status
+    if [ -z "$APM_GITHUB_OWNER" ]; then
+        echo ""
+        apm_header "GitHub Status"
+        echo ""
+        printf "  %-14s : %s\n" "Mode"   "${APM_GITHUB_MODE:-not configured}"
+        printf "  %-14s : %s\n" "Owner"  "(not configured)"
+        echo ""
+        apm_warn "GitHub not configured. Run: apm github connect"
+        echo ""
+        return 0
+    fi
+
+    _apm_github_check_prereqs
+
+    local mode="${APM_GITHUB_MODE:-monorepo}"
+
+    echo ""
+    apm_header "GitHub Status"
+    echo ""
+    printf "  %-14s : %s\n" "Mode"   "$mode"
+    printf "  %-14s : %s\n" "Owner"  "$APM_GITHUB_OWNER"
+    [ "$mode" = "monorepo" ] && printf "  %-14s : %s\n" "Repo" "$APM_GITHUB_MONOREPO"
+    printf "  %-14s : %s\n" "Branch" "${APM_GITHUB_BRANCH:-main}"
+    echo ""
+
+    local symbols='{"in-sync":"  ✓","out-of-sync":"  ~","not-pushed":"  ○","not-cloned":"  ?"}'
+
+    if [ "$mode" = "monorepo" ]; then
+        apm_info "Cloning monorepo for status check..."
+        local clone_dir
+        clone_dir=$(_apm_github_clone_tmp "")
+
+        local status_json
+        status_json=$(_apm_py github-status \
+            --db "$APM_AGENTS_DB" \
+            --clone-dir "$clone_dir" \
+            --github-mode "$mode")
+        rm -rf "$clone_dir"
+
+        if [ "$APM_JSON_MODE" = "1" ]; then echo "$status_json"; return 0; fi
+
+        echo "$status_json" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+agents = data.get('agents', [])
+symbols = {'in-sync': '  ✓', 'out-of-sync': '  ~', 'not-pushed': '  ○', 'not-cloned': '  ?'}
+tty = sys.stdout.isatty()
+C = {
+    'green':  '\033[32m' if tty else '',
+    'yellow': '\033[33m' if tty else '',
+    'cyan':   '\033[36m' if tty else '',
+    'dim':    '\033[2m'  if tty else '',
+    'reset':  '\033[0m'  if tty else '',
+}
+STATE_COLOR = {
+    'in-sync':    C['green'],
+    'out-of-sync': C['yellow'],
+    'not-pushed': C['cyan'],
+    'not-cloned': C['dim'],
+}
+for a in agents:
+    state = a.get('github_state','?')
+    sym   = symbols.get(state, '  ?')
+    color = STATE_COLOR.get(state, '')
+    reset = C['reset'] if color else ''
+    print(f\"{color}{sym}  {a.get('id','?'):<28}  {state}{reset}\")
+"
+    else
+        # per-agent: clone each agent repo individually
+        local agent_ids=()
+        while IFS= read -r line; do
+            agent_ids+=("$line")
+        done < <(ls -1 "$APM_AGENTS_DB" | grep -v '^[_.]')
+
+        local all_agent_json='{"agents":['
+        local first=1
+        for agent_id in "${agent_ids[@]}"; do
+            apm_info "  Checking $agent_id..."
+            local clone_dir gh_agent_dir gh_state diff_json
+            clone_dir=$(mktemp -d)
+            local repo_url
+            repo_url=$(_apm_github_repo_url "$agent_id")
+            if git clone --depth 1 --branch "${APM_GITHUB_BRANCH:-main}" \
+                    "$repo_url" "$clone_dir" 2>/dev/null; then
+                gh_agent_dir=$(_apm_github_agent_dir "$clone_dir" "$agent_id")
+                diff_json=$(_apm_py github-diff \
+                    --id "$agent_id" \
+                    --db "$APM_AGENTS_DB" \
+                    --github-dir "$gh_agent_dir" 2>/dev/null)
+                gh_state=$(echo "$diff_json" | python3 -c \
+                    "import json,sys; print('in-sync' if json.load(sys.stdin).get('in_sync') else 'out-of-sync')" 2>/dev/null)
+            else
+                gh_state="not-pushed"
+            fi
+            rm -rf "$clone_dir"
+
+            local sym
+            case "$gh_state" in
+                in-sync)     sym="  ✓" ;;
+                out-of-sync) sym="  ~" ;;
+                not-pushed)  sym="  ○" ;;
+                *)           sym="  ?" ;;
+            esac
+            printf "%s  %-28s  %s\n" "$sym" "$agent_id" "$gh_state"
+        done
+    fi
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
+# apm github diff <id> — diff one agent vs GitHub
+# ---------------------------------------------------------------------------
+
+_apm_github_diff() {
+    local id="${1:-}"
+    if [ -z "$id" ]; then
+        apm_die 2 "Usage: apm github diff <id>"
+    fi
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    _apm_github_check_prereqs
+
+    echo ""
+    printf "  %-10s : %s\n" "Agent"  "$id"
+    printf "  %-10s : %s\n" "Repo"   "$(_apm_github_repo_url "$id")"
+    printf "  %-10s : %s\n" "Branch" "${APM_GITHUB_BRANCH:-main}"
+    echo ""
+
+    apm_info "Cloning for diff..."
+
+    local clone_dir
+    clone_dir=$(_apm_github_clone_tmp "$id")
+
+    local gh_agent_dir
+    gh_agent_dir=$(_apm_github_agent_dir "$clone_dir" "$id")
+
+    local diff_json
+    diff_json=$(_apm_py github-diff \
+        --id "$id" \
+        --db "$APM_AGENTS_DB" \
+        --github-dir "$gh_agent_dir")
+    local diff_exit=$?
+
+    rm -rf "$clone_dir"
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        echo "$diff_json"
+        return $diff_exit
+    fi
+
+    echo "$diff_json" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if d.get('in_sync'):
+    print('  (in-sync — no differences)')
+else:
+    changed = d.get('changed_files', [])
+    missing_gh = d.get('missing_in_github', [])
+    missing_lib = d.get('missing_in_library', [])
+    for f in missing_gh:
+        print(f'  only-in-library : {f}')
+    for f in missing_lib:
+        print(f'  only-in-github  : {f}')
+    for f in changed:
+        print(f'  changed         : {f}')
+"
+    echo ""
+    return $diff_exit
+}
+
+# ---------------------------------------------------------------------------
+# apm github push <id> — push agent from library to GitHub
+# ---------------------------------------------------------------------------
+
+_apm_github_push() {
+    local id="${1:-}"
+    local push_all=0
+    if [ "$id" = "--all" ]; then push_all=1; id=""; fi
+
+    if [ -z "$id" ] && [ "$push_all" = "0" ]; then
+        apm_die 2 "Usage: apm github push <id|--all>"
+    fi
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    _apm_github_check_prereqs
+
+    if [ "$APM_DRY_RUN" = "1" ]; then
+        echo ""
+        echo "  (dry run — nothing pushed)"
+        echo ""
+        return 0
+    fi
+
+    apm_acquire_lock "github"
+
+    echo ""
+    apm_header "GitHub Push"
+
+    local branch="${APM_GITHUB_BRANCH:-main}"
+    local mode="${APM_GITHUB_MODE:-monorepo}"
+    local push_ids=()
+
+    if [ "$push_all" = "1" ]; then
+        while IFS= read -r line; do
+            push_ids+=("$line")
+        done < <(ls -1 "$APM_AGENTS_DB" | grep -v '^[_.]')
+    else
+        push_ids=("$id")
+    fi
+
+    local pushed=0 skipped=0
+
+    if [ "$mode" = "monorepo" ]; then
+        # ---- monorepo: one clone, all agents go into subdirs ----
+        apm_info "Cloning monorepo for push..."
+        local clone_dir
+        clone_dir=$(_apm_github_clone_tmp "") || {
+            apm_release_lock "github"
+            return 2
+        }
+
+        for agent_id in "${push_ids[@]}"; do
+            local agent_dir="${APM_AGENTS_DB}/${agent_id}"
+            if [ ! -d "$agent_dir" ]; then
+                apm_warn "Agent not found in library: $agent_id (skipping)"
+                skipped=$((skipped + 1)); continue
+            fi
+            local gh_agent_dir="${clone_dir}/${agent_id}"
+            local diff_json already_in_sync
+            diff_json=$(_apm_py github-diff --id "$agent_id" --db "$APM_AGENTS_DB" \
+                --github-dir "$gh_agent_dir" 2>/dev/null)
+            already_in_sync=$(echo "$diff_json" | python3 -c \
+                "import json,sys; print('true' if json.load(sys.stdin).get('in_sync') else 'false')" 2>/dev/null)
+            if [ "$already_in_sync" = "true" ]; then
+                apm_info "  $agent_id: already in-sync"; skipped=$((skipped + 1)); continue
+            fi
+            if [ "$APM_FORCE" != "1" ]; then
+                printf "  Push %s to GitHub? [y/N] " "$agent_id"
+                read -r _confirm
+                case "$_confirm" in [yY]*) ;; *) echo "  Skipped: $agent_id"; skipped=$((skipped+1)); continue ;; esac
+            fi
+            mkdir -p "$gh_agent_dir"
+            find "$agent_dir" -maxdepth 1 -mindepth 1 ! -name "versions" \
+                -exec cp -r {} "$gh_agent_dir/" \; || {
+                rm -rf "$clone_dir"; apm_release_lock "github"
+                apm_die 2 "Failed to stage $agent_id for push"
+            }
+            if [ -d "${agent_dir}/instructions" ]; then
+                mkdir -p "${gh_agent_dir}/instructions"
+                cp -r "${agent_dir}/instructions/." "${gh_agent_dir}/instructions/" || {
+                    rm -rf "$clone_dir"; apm_release_lock "github"
+                    apm_die 2 "Failed to stage instructions for $agent_id"
+                }
+            fi
+            pushed=$((pushed + 1))
+            apm_ok "  Staged: $agent_id"
+        done
+
+        if [ "$pushed" -eq 0 ]; then
+            rm -rf "$clone_dir"; apm_release_lock "github"
+            apm_info "Nothing to push ($skipped skipped)."; echo ""; return 0
+        fi
+
+        (
+            cd "$clone_dir"
+            git config user.email "apm@local" 2>/dev/null || true
+            git config user.name "apm" 2>/dev/null || true
+            git add -A
+            git commit -m "apm: push ${pushed} agent(s) — $(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null || true
+        )
+        if ! (cd "$clone_dir" && git push origin "$branch" 2>/dev/null); then
+            rm -rf "$clone_dir"; apm_release_lock "github"
+            apm_die 2 "Push failed — remote may have advanced. Pull first."
+        fi
+        rm -rf "$clone_dir"
+        apm_release_lock "github"
+        apm_ok "Pushed $pushed agent(s) to ${APM_GITHUB_OWNER}/${APM_GITHUB_MONOREPO}:${branch}"
+
+    else
+        # ---- per-agent: one clone per agent, content at repo root ----
+        for agent_id in "${push_ids[@]}"; do
+            local agent_dir="${APM_AGENTS_DB}/${agent_id}"
+            if [ ! -d "$agent_dir" ]; then
+                apm_warn "Agent not found in library: $agent_id (skipping)"
+                skipped=$((skipped + 1)); continue
+            fi
+
+            apm_info "  Cloning $agent_id repo..."
+            local clone_dir
+            clone_dir=$(_apm_github_clone_tmp "$agent_id") || {
+                apm_warn "  Failed to clone repo for $agent_id (skipping)"
+                skipped=$((skipped + 1)); continue
+            }
+
+            local gh_agent_dir
+            gh_agent_dir=$(_apm_github_agent_dir "$clone_dir" "$agent_id")
+            local diff_json already_in_sync
+            diff_json=$(_apm_py github-diff --id "$agent_id" --db "$APM_AGENTS_DB" \
+                --github-dir "$gh_agent_dir" 2>/dev/null)
+            already_in_sync=$(echo "$diff_json" | python3 -c \
+                "import json,sys; print('true' if json.load(sys.stdin).get('in_sync') else 'false')" 2>/dev/null)
+            if [ "$already_in_sync" = "true" ]; then
+                apm_info "  $agent_id: already in-sync"
+                rm -rf "$clone_dir"; skipped=$((skipped + 1)); continue
+            fi
+
+            if [ "$APM_FORCE" != "1" ]; then
+                printf "  Push %s to GitHub? [y/N] " "$agent_id"
+                read -r _confirm
+                case "$_confirm" in
+                    [yY]*) ;;
+                    *) echo "  Skipped: $agent_id"; rm -rf "$clone_dir"; skipped=$((skipped+1)); continue ;;
+                esac
+            fi
+
+            # Copy canonical content to clone root (per-agent: repo root = agent content)
+            find "$agent_dir" -maxdepth 1 -mindepth 1 ! -name "versions" \
+                -exec cp -r {} "$clone_dir/" \; || {
+                rm -rf "$clone_dir"; apm_release_lock "github"
+                apm_die 2 "Failed to stage $agent_id for push"
+            }
+            if [ -d "${agent_dir}/instructions" ]; then
+                mkdir -p "${clone_dir}/instructions"
+                cp -r "${agent_dir}/instructions/." "${clone_dir}/instructions/" || {
+                    rm -rf "$clone_dir"; apm_release_lock "github"
+                    apm_die 2 "Failed to stage instructions for $agent_id"
+                }
+            fi
+
+            local _commit_rc=0
+            (
+                cd "$clone_dir"
+                git config user.email "apm@local" 2>/dev/null || true
+                git config user.name "apm" 2>/dev/null || true
+                git add -A
+                git commit -m "apm: push $agent_id — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            ) > /dev/null 2>&1 || _commit_rc=$?
+
+            if [ "$_commit_rc" -ne 0 ]; then
+                apm_info "  $agent_id: already in-sync (nothing to commit)"
+                rm -rf "$clone_dir"; skipped=$((skipped + 1)); continue
+            fi
+
+            if (cd "$clone_dir" && git push origin "$branch" 2>/dev/null); then
+                pushed=$((pushed + 1))
+                apm_ok "  Pushed: $agent_id → ${APM_GITHUB_OWNER}/${agent_id}:${branch}"
+            else
+                apm_warn "  Push failed for $agent_id — remote may have advanced"
+                skipped=$((skipped + 1))
+            fi
+            rm -rf "$clone_dir"
+        done
+
+        apm_release_lock "github"
+        [ "$pushed" -gt 0 ] && apm_ok "Pushed $pushed agent repo(s)."
+        [ "$pushed" -eq 0 ] && apm_info "Nothing to push ($skipped skipped)."
+    fi
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
+# apm github pull <id> — pull agent from GitHub into staging, then apply
+# ---------------------------------------------------------------------------
+
+_apm_github_pull() {
+    local id="${1:-}"
+    local pull_all=0
+    if [ "$id" = "--all" ]; then pull_all=1; id=""; fi
+
+    if [ -z "$id" ] && [ "$pull_all" = "0" ]; then
+        apm_die 2 "Usage: apm github pull <id|--all>"
+    fi
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    _apm_github_check_prereqs
+
+    local mode="${APM_GITHUB_MODE:-monorepo}"
+    local timestamp
+    timestamp=$(date -u +%Y-%m-%d-%H%M)
+
+    echo ""
+    apm_header "GitHub Pull"
+
+    local staged=0 skipped=0
+
+    if [ "$mode" = "monorepo" ]; then
+        # ---- monorepo: one clone, iterate agent dirs inside it ----
+        apm_info "Cloning monorepo for pull..."
+        local clone_dir
+        clone_dir=$(_apm_github_clone_tmp "")
+
+        local pull_ids=()
+        if [ "$pull_all" = "1" ]; then
+            while IFS= read -r line; do
+                pull_ids+=("$line")
+            done < <(ls -1 "$clone_dir" 2>/dev/null | grep -v '^[_.]' | grep -v '\.git')
+        else
+            pull_ids=("$id")
+        fi
+
+        for agent_id in "${pull_ids[@]}"; do
+            local gh_agent_dir="${clone_dir}/${agent_id}"
+            local _outcome
+            _outcome=$(_apm_pull_one_agent "$agent_id" "$gh_agent_dir" "$timestamp")
+            [ "$_outcome" = "staged" ] && staged=$((staged + 1)) || skipped=$((skipped + 1))
+        done
+
+        rm -rf "$clone_dir"
+
+    else
+        # ---- per-agent: clone each agent's own repo separately ----
+        local pull_ids=()
+        if [ "$pull_all" = "1" ]; then
+            # For per-agent --all: iterate library IDs (we own those repos)
+            while IFS= read -r line; do
+                pull_ids+=("$line")
+            done < <(ls -1 "$APM_AGENTS_DB" | grep -v '^[_.]')
+        else
+            pull_ids=("$id")
+        fi
+
+        for agent_id in "${pull_ids[@]}"; do
+            apm_info "  Cloning $agent_id repo..."
+            local clone_dir
+            clone_dir=$(mktemp -d)
+            local repo_url
+            repo_url=$(_apm_github_repo_url "$agent_id")
+            if ! git clone --depth 1 --branch "${APM_GITHUB_BRANCH:-main}" \
+                    "$repo_url" "$clone_dir" 2>/dev/null; then
+                apm_warn "  Failed to clone repo for $agent_id (skipping)"
+                rm -rf "$clone_dir"
+                skipped=$((skipped + 1))
+                continue
+            fi
+            local gh_agent_dir
+            gh_agent_dir=$(_apm_github_agent_dir "$clone_dir" "$agent_id")
+            local _outcome
+            _outcome=$(_apm_pull_one_agent "$agent_id" "$gh_agent_dir" "$timestamp")
+            [ "$_outcome" = "staged" ] && staged=$((staged + 1)) || skipped=$((skipped + 1))
+            rm -rf "$clone_dir"
+        done
+    fi
+
+    echo ""
+    apm_info "Done: $staged staged, $skipped skipped."
+    echo ""
+}
+
+# Process a single agent during pull: diff, stage, show summary, apply on confirm.
+# Prints "staged" or "skipped" to stdout for the caller to count.
+# All user-facing output goes to stderr.
+_apm_pull_one_agent() {
+    local agent_id="$1"
+    local gh_agent_dir="$2"
+    local timestamp="$3"
+
+    if [ ! -d "$gh_agent_dir" ]; then
+        apm_warn "  $agent_id: not found in remote repo (skipping)" >&2
+        echo "skipped"
+        return
+    fi
+
+    local diff_json already_in_sync
+    diff_json=$(_apm_py github-diff \
+        --id "$agent_id" \
+        --db "$APM_AGENTS_DB" \
+        --github-dir "$gh_agent_dir" 2>/dev/null)
+    already_in_sync=$(echo "$diff_json" | python3 -c \
+        "import json,sys; print('true' if json.load(sys.stdin).get('in_sync') else 'false')" 2>/dev/null)
+
+    if [ "$already_in_sync" = "true" ]; then
+        apm_info "  $agent_id: already in-sync" >&2
+        echo "skipped"
+        return
+    fi
+
+    local stage_dir="${APM_AGENTS_DB}/_staging/github/${agent_id}-${timestamp}"
+    apm_ensure_dir "$stage_dir"
+    cp -r "${gh_agent_dir}/." "${stage_dir}/" || {
+        apm_die 2 "Failed to stage $agent_id from GitHub clone"
+    }
+
+    echo "" >&2
+    printf "  %-10s : %s\n" "Agent"  "$agent_id" >&2
+    printf "  %-10s : %s\n" "Staged" "$stage_dir" >&2
+
+    echo "$diff_json" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+for f in d.get('missing_in_github', []): print('    only-in-library : ' + f)
+for f in d.get('missing_in_library', []): print('    only-in-github  : ' + f)
+for f in d.get('changed_files', []):     print('    changed         : ' + f)
+" 2>/dev/null >&2
+    echo "" >&2
+
+    if [ "$APM_DRY_RUN" = "1" ]; then
+        echo "  (dry run — staged only, not applied)" >&2
+        echo "" >&2
+        echo "staged"
+        return
+    fi
+
+    local lib_exists=0
+    [ -d "${APM_AGENTS_DB}/${agent_id}" ] && lib_exists=1
+
+    if [ "$APM_FORCE" = "1" ]; then
+        _apply_github_stage "$stage_dir" "$agent_id" "$lib_exists" >&2
+        apm_ok "  Applied: ${APM_AGENTS_DB}/${agent_id}/" >&2
+    else
+        printf "  Apply staged content to library? [y/N] " >&2
+        read -r _confirm
+        case "$_confirm" in
+            [yY]*)
+                _apply_github_stage "$stage_dir" "$agent_id" "$lib_exists" >&2
+                apm_ok "  Applied: ${APM_AGENTS_DB}/${agent_id}/" >&2
+                ;;
+            *)
+                echo "  Staged at: $stage_dir (not applied)" >&2
+                ;;
+        esac
+    fi
+    echo "staged"
+}
+
+# Apply staged GitHub pull content to the canonical library.
+# Uses the same backup + lock pattern as _apm_apply_draft.
+_apply_github_stage() {
+    local stage_dir="$1"
+    local agent_id="$2"
+    local lib_exists="${3:-0}"
+
+    local agent_dir="${APM_AGENTS_DB}/${agent_id}"
+
+    apm_acquire_lock "library"
+
+    if [ "$lib_exists" = "1" ] && [ -d "$agent_dir" ]; then
+        local backup_path
+        backup_path=$(apm_backup_agent "$agent_dir") || {
+            apm_release_lock "library"
+            apm_die 2 "Backup failed for $agent_dir — aborting pull apply"
+        }
+        apm_info "Backed up: $backup_path"
+    fi
+
+    apm_ensure_dir "$agent_dir" || { apm_release_lock "library"; apm_die 2 "Cannot create $agent_dir"; }
+
+    # Clear existing agent content (except versions/) so deleted-remote files don't linger
+    find "$agent_dir" -maxdepth 1 -mindepth 1 ! -name "versions" -exec rm -rf {} \; || {
+        apm_release_lock "library"
+        apm_die 2 "Failed to clear existing content in $agent_dir before apply"
+    }
+
+    cp -r "${stage_dir}/." "${agent_dir}/" || {
+        apm_release_lock "library"
+        apm_die 2 "Failed to copy staged content to library"
+    }
+
+    apm_release_lock "library"
+}
+
+# ---------------------------------------------------------------------------
+# Update: reinstall all outdated agents
+# ---------------------------------------------------------------------------
+
+cmd_update() {
+    local id="${1:-}"
+    [ "$id" = "--all" ] && id=""   # --all is the default behaviour
+
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    # Collect outdated agents (state == outdated or ready)
+    local status_json
+    status_json=$(_apm_py status-agents \
+        --db "$APM_AGENTS_DB" \
+        --platform "$APM_PLATFORM" \
+        --runtime-dir "$APM_RUNTIME_DIR")
+
+    local targets
+    if [ -n "$id" ]; then
+        # Single agent: verify it's installed
+        local state
+        state=$(echo "$status_json" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for a in d.get('agents',[]):
+    if a['id'] == sys.argv[1]:
+        print(a.get('state',{}).get('sync',''))
+        break
+" "$id" 2>/dev/null)
+        if [ -z "$state" ]; then
+            apm_die 2 "Agent '$id' not found in library"
+        fi
+        if [ "$state" = "in-sync" ]; then
+            echo ""
+            echo "  $id is already in-sync."
+            echo ""
+            return 0
+        fi
+        targets="$id"
+    else
+        targets=$(echo "$status_json" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for a in d.get('agents',[]):
+    if a.get('state',{}).get('sync') in ('outdated','ready'):
+        print(a['id'])
+" 2>/dev/null)
+    fi
+
+    if [ -z "$targets" ]; then
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            echo '{"command":"update","updated":0,"failed":0,"status":"in-sync"}'
+        else
+            echo ""
+            echo "  All installed agents are in-sync."
+            echo ""
+        fi
+        return 0
+    fi
+
+    local count
+    count=$(echo "$targets" | wc -l | tr -d ' ')
+
+    if [ "$APM_JSON_MODE" != "1" ]; then
+        echo ""
+        echo "  Updating $count agent(s):"
+        echo "$targets" | while IFS= read -r aid; do
+            echo "    $aid"
+        done
+        echo ""
+    fi
+
+    if [ "$APM_DRY_RUN" = "1" ]; then
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            echo "{\"command\":\"update\",\"updated\":0,\"failed\":0,\"status\":\"dry-run\",\"would_update\":$(echo "$targets" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().split()))")}"
+        else
+            echo "  (dry run — nothing written)"
+            echo ""
+        fi
+        return 0
+    fi
+
+    if [ "$APM_FORCE" != "1" ] && [ "$APM_JSON_MODE" != "1" ]; then
+        printf "  Proceed? [y/N] "
+        read -r _confirm
+        case "$_confirm" in
+            [yY]*) ;;
+            *) echo "  Cancelled."; echo ""; return 0 ;;
+        esac
+    fi
+
+    local updated=0 failed=0
+    while IFS= read -r aid; do
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            cmd_install "$aid" > /dev/null 2>&1 && updated=$((updated + 1)) || failed=$((failed + 1))
+        else
+            if cmd_install "$aid"; then
+                updated=$((updated + 1))
+            else
+                apm_warn "Failed to update $aid"
+                failed=$((failed + 1))
+            fi
+        fi
+    done <<< "$targets"
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        echo "{\"command\":\"update\",\"updated\":$updated,\"failed\":$failed,\"status\":\"done\"}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Interactive mode: dashboard + REPL
+# ---------------------------------------------------------------------------
+
+_apm_interactive_dashboard() {
+    apm_header "apm  (platform: ${APM_PLATFORM})"
+
+    local out
+    out=$(_apm_py status-agents \
+        --db "$APM_AGENTS_DB" \
+        --platform "$APM_PLATFORM" \
+        --runtime-dir "$APM_RUNTIME_DIR" 2>/dev/null) || {
+        apm_warn "Could not load agent status"
+        return 1
+    }
+
+    echo "$out" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+agents = data.get('agents', [])
+ready = [a for a in agents if a.get('state',{}).get('sync') in ('ready','outdated')]
+in_sync = [a for a in agents if a.get('state',{}).get('sync') == 'in-sync']
+untracked = [a for a in agents if a.get('state',{}).get('sync') == 'unmanaged']
+collisions = [a for a in agents if a.get('state',{}).get('sync') == 'collision']
+
+print(f'  agents: {len(agents)} total, {len(in_sync)} in-sync, {len(ready)} actionable, {len(untracked)} untracked')
+print()
+if ready:
+    print('  Actionable:')
+    for a in ready:
+        sync = a.get('state',{}).get('sync','?')
+        print(f'    ~  {a[\"id\"]}  ({sync})')
+    print()
+if untracked:
+    print('  Untracked runtime agents:')
+    for a in untracked:
+        print(f'    *  {a[\"id\"]}')
+    print()
+if collisions:
+    print('  Collisions (run apm validate):')
+    for a in collisions:
+        print(f'    !  {a[\"id\"]}')
+    print()
+if not agents:
+    print('  (no agents in library)')
+    print()
+    print('  Try: import')
+"
+}
+
+cmd_interactive() {
+    if [ -z "$APM_AGENTS_DB" ]; then
+        if [ ! -f "${APM_CONFIG_DIR}/config.sh" ]; then
+            echo ""
+            echo "No config found at ${APM_CONFIG_DIR}/config.sh"
+            echo ""
+            cmd_setup
+            # Reload config after setup
+            apm_load_config
+            apm_apply_cli_overrides
+        else
+            apm_die 2 "No library path configured. Run: apm setup"
+        fi
+    fi
+
+    # If stdin is not a terminal, just print the dashboard and exit (non-interactive)
+    if [ ! -t 0 ]; then
+        _apm_interactive_dashboard
+        return 0
+    fi
+
+    _apm_interactive_dashboard
+    echo "  Commands: list  status  diff <id>  install <id> [id…]  install --all  install --cat <name>"
+    echo "            remove <id>  update [id]  import [id]  validate [id]  github <sub>  setup  help  quit"
+    echo ""
+
+    while true; do
+        printf "apm> "
+        read -r _line || break   # EOF (Ctrl-D) exits
+        _line="${_line#"${_line%%[![:space:]]*}"}"  # trim leading whitespace
+        [ -z "$_line" ] && continue
+
+        # Parse the line into command + args
+        local _icmd _iargs
+        _icmd="${_line%% *}"
+        _iargs=""
+        [ "${_line}" != "${_icmd}" ] && _iargs="${_line#* }"
+
+        case "$_icmd" in
+            quit|exit|q)
+                echo ""
+                break ;;
+            help|h|\?)
+                echo ""
+                echo "  list               List all agents and their sync state"
+                echo "  status             Show counts by state"
+                echo "  diff <id>          Diff library vs runtime for an agent"
+                echo "  install <id|--all|--cat <cat>>  Install agent(s) to runtime"
+                echo "  remove <id>        Remove agent from runtime"
+                echo "  update [id]        Reinstall outdated agents (all or one)"
+                echo "  import [id|path]   Import runtime agent into library"
+                echo "  validate [id]      Validate agent(s)"
+                echo "  github <sub>       GitHub commands (connect/status/push/pull/diff)"
+                echo "  setup              Re-run setup wizard"
+                echo "  refresh            Redisplay dashboard"
+                echo "  quit               Exit interactive mode"
+                echo "" ;;
+            refresh|r)
+                _apm_interactive_dashboard ;;
+            list)
+                cmd_list ;;
+            status)
+                cmd_status ;;
+            diff)
+                [ -z "$_iargs" ] && { echo "  Usage: diff <id>"; continue; }
+                cmd_diff "$_iargs" ;;
+            install)
+                [ -z "$_iargs" ] && { echo "  Usage: install <id|--all|--cat <category>>"; continue; }
+                # shellcheck disable=SC2086
+                cmd_install $_iargs ;;
+            remove)
+                [ -z "$_iargs" ] && { echo "  Usage: remove <id>"; continue; }
+                cmd_remove "$_iargs" ;;
+            update)
+                cmd_update "$_iargs" ;;
+            import)
+                # word-split intentional: agent IDs/paths contain no spaces
+                # shellcheck disable=SC2086
+                cmd_import $_iargs ;;
+            validate)
+                cmd_validate "$_iargs" ;;
+            github)
+                # shellcheck disable=SC2086
+                cmd_github $_iargs ;;
+            setup)
+                cmd_setup
+                apm_load_config
+                apm_apply_cli_overrides ;;
+            *)
+                echo "  Unknown command: $_icmd (type 'help' for commands)" ;;
+        esac
+    done
+
+    echo "Bye."
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
+# Main entrypoint
+# ---------------------------------------------------------------------------
+
+main() {
+    # Parse global flags first, leaving command + its args in _REMAINING_ARGS
+    _apm_parse_global_flags "$@"
+
+    # Load config (file → env → cli overrides)
+    apm_load_config
+    apm_apply_cli_overrides
+
+    # Check dependencies (skip for setup and help)
+    local cmd="${_REMAINING_ARGS[0]:-}"
+    if [ "$cmd" != "setup" ] && [ "$cmd" != "--help" ] && [ "$cmd" != "-h" ]; then
+        _apm_check_deps
+    fi
+
+    # Dispatch
+    case "$cmd" in
+        setup)
+            cmd_setup
+            ;;
+        config)
+            cmd_config
+            ;;
+        validate)
+            cmd_validate "${_REMAINING_ARGS[1]:-}"
+            ;;
+        list)
+            cmd_list
+            ;;
+        status)
+            cmd_status
+            ;;
+        diff)
+            cmd_diff "${_REMAINING_ARGS[1]:-}"
+            ;;
+        install)
+            cmd_install "${_REMAINING_ARGS[@]:1}"
+            ;;
+        remove)
+            cmd_remove "${_REMAINING_ARGS[1]:-}"
+            ;;
+        update)
+            cmd_update "${_REMAINING_ARGS[1]:-}"
+            ;;
+        import)
+            cmd_import "${_REMAINING_ARGS[@]:1}"
+            ;;
+        github)
+            cmd_github "${_REMAINING_ARGS[@]:1}"
+            ;;
+        --help|-h|help)
+            cat <<'HELP'
+apm — local-first package manager for AI agent prompt files
+
+Usage:
+  apm [flags] <command> [args]
+
+Global flags:
+  --db <path>        Override library database path
+  --platform <name>  Override platform (claude-code, cursor, codex, gemini, generic)
+  --json             Machine-readable JSON output
+  --dry-run          Show what would happen without doing it
+  --force            Skip confirmation prompts
+
+Commands:
+  setup                        Configure apm (interactive wizard)
+  config                       Show resolved configuration
+  validate [id]                Validate agent(s) in the library
+  list                         List agents with sync state and category
+  status                       Show counts by sync state
+  diff <id>                    Show diff between library and runtime
+  install <id> [id…]           Install one or more agents by ID
+  install --all                Install all ready/outdated agents
+  install --cat <name>         Install all agents in a category
+  remove <id>                  Remove agent from runtime
+  update [id]                  Reinstall outdated agents (all if no id given)
+  import                       Pick from unmanaged runtime agents (interactive)
+  import [id]                  Import specific agent, or --all for everything
+  github <sub>                 GitHub sync (connect, status, diff, push, pull)
+
+Run with no command for interactive mode.
+HELP
+            ;;
+        "")
+            cmd_interactive
+            ;;
+        *)
+            apm_die 2 "Unknown command: $cmd. Run 'apm --help' for usage."
+            ;;
+    esac
+}
+
+main "$@"
