@@ -7,7 +7,7 @@ A local-first CLI package manager for AI agent prompt files.
 ## Install
 
 ```bash
-git clone https://github.com/<user>/apm.git
+git clone https://github.com/alexsmedile/apm.git
 cd apm
 bash install.sh          # links apm into ~/.local/bin
 apm setup                # configure library path, platform, optional GitHub
