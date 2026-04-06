@@ -138,6 +138,10 @@ def extract_deploy(fm: dict, platform: str) -> dict:
     """
     Extract and normalize deploy config for given platform.
     Returns normalized dict with: platform, enabled, name, description, model, tools
+
+    agents-dir is a storage location, not a platform variant. If no agents-dir
+    block exists, fall back to the first enabled deploy block found (any platform).
+    Other platforms with no block return enabled: False (no-deploy).
     """
     deploy_block = fm.get('deploy', {}) or {}
     plat_block = deploy_block.get(platform, {}) or {}
@@ -147,7 +151,14 @@ def extract_deploy(fm: dict, platform: str) -> dict:
         return {'platform': platform, 'enabled': False}
 
     if not plat_block:
-        return {'platform': platform, 'enabled': False}
+        # agents-dir: fall back to first enabled deploy block
+        if platform == 'agents-dir':
+            for pb in deploy_block.values():
+                if isinstance(pb, dict) and pb.get('enabled', True) is not False:
+                    plat_block = pb
+                    break
+        if not plat_block:
+            return {'platform': platform, 'enabled': False}
 
     return {
         'platform': platform,
@@ -156,6 +167,8 @@ def extract_deploy(fm: dict, platform: str) -> dict:
         'description': plat_block.get('description', ''),
         'model': plat_block.get('model', ''),
         'tools': normalize_tools(plat_block.get('tools')),
+        'applyTo': plat_block.get('applyTo', plat_block.get('paths', [])) or [],
+        'tags': plat_block.get('tags', []) or [],
     }
 
 
@@ -789,6 +802,12 @@ def generate_runtime_content(agent_id: str, db_path: str, platform: str) -> dict
     tools = deploy.get('tools', [])
     if tools:
         rt_fm['tools'] = tools
+    apply_to = deploy.get('applyTo', [])
+    if apply_to:
+        rt_fm['applyTo'] = apply_to
+    tags = deploy.get('tags', [])
+    if tags:
+        rt_fm['tags'] = tags
     rt_fm['apm'] = {
         'id': agent_id,
         'platform': platform,

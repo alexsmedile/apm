@@ -55,6 +55,11 @@ github:
   visibility: private
 
 deploy:
+  agents-dir:
+    name: git-mentor
+    description: Use for git workflows, branch strategy, rebases, merges, and PR hygiene.
+    tags: [git, devtools]
+    applyTo: ["**/*.md", ".github/**"]
   claude-code:
     name: git-mentor
     description: Use for git workflows, branch strategy, rebases, merges, and PR hygiene.
@@ -112,11 +117,62 @@ deploy:
 `deploy:` is the platform-specific install contract.
 
 Each platform block may include:
-- `name`
-- `description`
-- `model`
-- `tools`
-- `enabled`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `name` | string | runtime filename and slash-command name |
+| `description` | string | shown to the AI for auto-trigger decisions |
+| `model` | string | e.g. `claude-sonnet-4-6`, `auto`, `gemini-1.5` |
+| `tools` | list | tool permissions e.g. `[Read, Write, Bash]` |
+| `applyTo` | list | file glob scoping e.g. `["**/*.py", "src/**"]` (alias: `paths`) |
+| `tags` | list | categorization / indexing e.g. `["testing", "python"]` |
+| `enabled` | boolean | set `false` to disable this platform without deleting the block |
+
+`applyTo` / `paths` and `tags` are part of the cross-tool generic frontmatter subset (see §5).
+
+---
+
+## 5. Generic Cross-Tool Frontmatter (agents-dir)
+
+When deploying to `agents-dir` (`~/.agents/`), agents are read by multiple tools (Codex, Gemini, Cursor, VS Code Copilot). Use the minimal cross-tool subset for broadest compatibility:
+
+```yaml
+---
+name: test-runner
+description: Runs unit tests and reports failures with fix suggestions.
+tags: [testing, python]
+applyTo: ["**/*.py", "tests/**"]
+model: auto
+---
+```
+
+This subset maps across tools as follows:
+
+| Field | Claude Code | Codex | Gemini | Cursor | Windsurf |
+|-------|-------------|-------|--------|--------|----------|
+| `name` | slash-command | identifier | identifier | slash-command | identifier |
+| `description` | auto-trigger | indexing | indexing | auto-trigger | auto-trigger |
+| `applyTo` | `paths` glob | `applyTo` glob | `applyTo` glob | glob match | glob match |
+| `tags` | — | indexing | — | — | — |
+| `model` | optional | optional | preferred | optional | optional |
+
+For agents targeting a specific platform only, use the full `deploy.<platform>` block instead.
+
+**agents-dir fallback behavior:** when `apm install --platform agents-dir` is run and no `deploy.agents-dir` block exists, apm falls back to the first enabled deploy block found. To explicitly define agents-dir output, add:
+
+```yaml
+deploy:
+  agents-dir:
+    name: test-runner
+    description: Runs unit tests.
+    applyTo: ["**/*.py"]
+    tags: [testing]
+  claude-code:
+    name: test-runner
+    description: Runs unit tests and reports failures with fix suggestions.
+    model: claude-sonnet-4-6
+    tools: [Read, Bash]
+```
 
 ---
 
