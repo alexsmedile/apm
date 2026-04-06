@@ -6,11 +6,6 @@ It serves two purposes:
 - clarify intended behavior before implementation
 - provide a practical operator reference later
 
-See also:
-- [TUI.md](TUI.md)
-- [spec/SPEC_IMPORT.md](spec/SPEC_IMPORT.md)
-- [spec/SPEC_GITHUB.md](spec/SPEC_GITHUB.md)
-
 ## 1. Setup and Orientation
 
 ### How does `apm` work at a high level?

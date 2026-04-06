@@ -12,6 +12,7 @@ __pycache__/
 # Editors
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~

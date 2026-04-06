@@ -48,6 +48,7 @@ _apm_py() {
 
 _CLI_DB=""
 _CLI_PLATFORM=""
+_CLI_INSTALL_MODE=""
 APM_JSON_MODE=0
 APM_DRY_RUN=0
 APM_FORCE=0
@@ -61,9 +62,12 @@ _apm_parse_global_flags() {
             --platform)
                 [ $# -lt 2 ] && apm_die 2 "--platform requires a value"
                 _CLI_PLATFORM="$2"; shift 2 ;;
-            --json)     APM_JSON_MODE=1; export APM_JSON_MODE; shift ;;
-            --dry-run)  APM_DRY_RUN=1; shift ;;
-            --force)    APM_FORCE=1; shift ;;
+            --json)          APM_JSON_MODE=1; export APM_JSON_MODE; shift ;;
+            --dry-run)       APM_DRY_RUN=1; shift ;;
+            --force)         APM_FORCE=1; shift ;;
+            --install-mode)
+                [ $# -lt 2 ] && apm_die 2 "--install-mode requires a value (copy|symlink)"
+                _CLI_INSTALL_MODE="$2"; shift 2 ;;
             *)          break ;;
         esac
     done
@@ -93,6 +97,12 @@ print(json.dumps({
     'runtime_dir':     '${APM_RUNTIME_DIR}',
     'claude_agents':   '${APM_CLAUDE_AGENTS}',
     'cursor_rules':    '${APM_CURSOR_RULES}',
+    'codex_agents':    '${APM_CODEX_AGENTS}',
+    'gemini_md':       '${APM_GEMINI_MD}',
+    'windsurf_rules':  '${APM_WINDSURF_RULES}',
+    'continue_rules':  '${APM_CONTINUE_RULES}',
+    'agents_dir':      '${APM_AGENTS_DIR}',
+    'install_mode':    '${APM_INSTALL_MODE}',
     'generic_export':  '${APM_GENERIC_EXPORT}',
     'github_mode':     '${APM_GITHUB_MODE}',
     'github_owner':    '${APM_GITHUB_OWNER}',
@@ -113,6 +123,12 @@ print(json.dumps({
     echo ""
     echo "  Claude agents   : ${APM_CLAUDE_AGENTS}"
     echo "  Cursor rules    : ${APM_CURSOR_RULES}"
+    echo "  Codex agents    : ${APM_CODEX_AGENTS}"
+    echo "  Gemini dir      : ${APM_GEMINI_MD}"
+    echo "  Windsurf rules  : ${APM_WINDSURF_RULES}"
+    echo "  Continue rules  : ${APM_CONTINUE_RULES}"
+    echo "  Agents dir      : ${APM_AGENTS_DIR}"
+    echo "  Install mode    : ${APM_INSTALL_MODE}"
     echo "  Generic export  : ${APM_GENERIC_EXPORT}"
     echo ""
     if [ -n "${APM_GITHUB_MODE}" ]; then
@@ -551,7 +567,64 @@ for a in d.get('agents',[]):
     # Ensure runtime dir exists
     apm_ensure_dir "$APM_RUNTIME_DIR"
 
-    # Generate runtime file content via Python helper
+    # Symlink mode: link platform dir file -> ~/.agents/ file
+    # Only applies when platform is not agents-dir itself
+    if [ "${APM_INSTALL_MODE}" = "symlink" ] && [ "${APM_PLATFORM}" != "agents-dir" ]; then
+        local agents_dir_file="${APM_AGENTS_DIR}/${deploy_name}.md"
+
+        # Ensure the agent exists in ~/.agents/ first (write it if missing)
+        if [ ! -f "$agents_dir_file" ]; then
+            apm_ensure_dir "$APM_AGENTS_DIR"
+            local _agents_content
+            _agents_content=$(_apm_py generate-runtime \
+                --id "$id" \
+                --db "$APM_AGENTS_DB" \
+                --platform "$APM_PLATFORM")
+            if ! echo "$_agents_content" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if 'error' not in d else 1)" 2>/dev/null; then
+                apm_release_lock "runtime-${APM_PLATFORM}"
+                apm_die 2 "Failed to generate content for '$id' in agents-dir"
+            fi
+            local _agents_body
+            _agents_body=$(echo "$_agents_content" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['content'])")
+            local _agents_tmp="${agents_dir_file}.apm.tmp.$$"
+            if ! printf '%s\n' "$_agents_body" > "$_agents_tmp"; then
+                rm -f "$_agents_tmp"
+                apm_release_lock "runtime-${APM_PLATFORM}"
+                apm_die 2 "Failed to write temp file for '$id' in agents-dir"
+            fi
+            apm_write_atomic "$_agents_tmp" "$agents_dir_file" || {
+                rm -f "$_agents_tmp"
+                apm_release_lock "runtime-${APM_PLATFORM}"
+                apm_die 2 "Failed to install '$id' to agents-dir"
+            }
+        fi
+
+        # Create relative symlink: platform-dir/file.md -> ../../.agents/file.md
+        local rel_target
+        rel_target=$(python3 -c "
+import os
+print(os.path.relpath('${agents_dir_file}', os.path.dirname('${runtime_file}')))
+")
+        ln -sf "$rel_target" "$runtime_file" || {
+            apm_release_lock "runtime-${APM_PLATFORM}"
+            apm_die 2 "Failed to create symlink for '$id'"
+        }
+
+        apm_release_lock "runtime-${APM_PLATFORM}"
+
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            python3 -c "
+import json
+print(json.dumps({'command':'install','id':'$id','platform':'$APM_PLATFORM','runtime_file':'$runtime_file','symlink_target':'$rel_target','success':True}))
+"
+        else
+            printf "  %-10s : %s -> %s\n" "Linked" "$runtime_file" "$rel_target"
+            echo ""
+        fi
+        return 0
+    fi
+
+    # Copy mode (default): generate content and write file
     local runtime_content
     runtime_content=$(_apm_py generate-runtime \
         --id "$id" \

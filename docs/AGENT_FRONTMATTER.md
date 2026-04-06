@@ -177,5 +177,5 @@ origin: claude-import
 ## 6. Notes
 
 - This document is the metadata reference, not the full tool behavior spec.
-- If the metadata model evolves, update this document first, then align `CLAUDE.md` and `docs/WORKFLOWS.md`.
+- If the metadata model evolves, update this document first, then align `../CLAUDE.md` and `WORKFLOWS.md`.
 

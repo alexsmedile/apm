@@ -2,19 +2,7 @@
 
 This document defines the implementation architecture for `apm`.
 
-It is not the product spec.
-The product rules live in:
-- [PLAN.md](/Users/alex/code/tools/apm/PLAN.md)
-- [SPEC_CONFIG.md](/Users/alex/code/tools/apm/SPEC_CONFIG.md)
-- [SPEC_LIBRARY.md](/Users/alex/code/tools/apm/SPEC_LIBRARY.md)
-- [SPEC_STATE.md](/Users/alex/code/tools/apm/SPEC_STATE.md)
-- [SPEC_RUNTIME.md](/Users/alex/code/tools/apm/SPEC_RUNTIME.md)
-- [SPEC_IMPORT.md](/Users/alex/code/tools/apm/SPEC_IMPORT.md)
-- [SPEC_GITHUB.md](/Users/alex/code/tools/apm/SPEC_GITHUB.md)
-- [SPEC_SAFETY.md](/Users/alex/code/tools/apm/SPEC_SAFETY.md)
-- [SPEC_TESTS.md](/Users/alex/code/tools/apm/SPEC_TESTS.md)
-
-This file explains how to build the system so it is:
+Main principles:
 - modular
 - testable
 - safe for destructive operations
@@ -472,29 +460,19 @@ This keeps:
 - parser logic centralized
 - tests easier to write
 
-## 10. Filesystem Layout During Development
+## 10. Developer Task Runner (Makefile)
 
-Recommended repository layout:
+The root `Makefile` provides a standard interface for common development tasks. It acts as a "thin wrapper" around project scripts to ensure consistency and discoverability.
 
-```text
-.
-├── apm
-├── lib/
-│   ├── shell/
-│   └── py/
-├── tests/
-│   ├── fixtures/
-│   ├── helpers/
-│   └── test_*.sh
-├── PLAN.md
-├── SPEC_*.md
-├── AGENT_FRONTMATTER.md
-├── AGENT-PLAN.md
-├── TEST.md
-└── ARCHITECTURE.md
-```
+| Target | Command | Purpose |
+|--------|---------|---------|
+| `test` | `bash tests/run_tests.sh` | Run the full automated test suite |
+| `lint` | `bash -n ...` | Perform static syntax checks on Bash and Python |
+| `install` | `bash install.sh` | Link `apm` to `~/.local/bin` |
+| `uninstall` | `bash install.sh --uninstall` | Remove the `apm` symlink |
+| `check` | `bash install.sh --check` | Verify system dependencies |
 
-## 11. Upgrade Paths
+## 11. Filesystem Layout During Development
 
 The architecture should support these upgrades without major rewrites.
 
