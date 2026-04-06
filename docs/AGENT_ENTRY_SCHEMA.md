@@ -1,4 +1,6 @@
-# AGENT_FRONTMATTER: Recommended Root Metadata for `apm`
+# Agent Entry Schema: Library Metadata and Deploy
+
+> **Note on terminology:** In most AI tools, "agent" refers to the tool's primary/default AI persona. The `agents/` directories (`~/.claude/agents/`, `~/.cursor/agents/`, etc.) hold **subagents** — specialized, named agents invoked for specific tasks. `apm` manages subagents only. Throughout this document, "agent" means a subagent entry in your library.
 
 This document defines the recommended root frontmatter schema for agent entries in the local database.
 
@@ -6,6 +8,7 @@ Purpose:
 - support Obsidian or similar database/preview tools
 - preserve rich metadata about each agent
 - separate local database metadata from platform-specific deploy metadata
+- make agent entries easier to archive, browse, filter, and review over time
 
 The root file is:
 
@@ -16,6 +19,12 @@ The root file is:
 The root frontmatter is for the database.
 The `deploy:` block inside it controls runtime installation output.
 
+Important:
+- most top-level fields in this document are suggestions for the database item/entity
+- they are useful for archivability, filtering, categorization, history, and local review
+- `apm` should preserve them, but should not use them to decide runtime install behavior
+- the `deploy:` block is the part `apm` uses for platform-specific installation behavior
+
 ---
 
 ## 1. Principles
@@ -24,6 +33,7 @@ The `deploy:` block inside it controls runtime installation output.
 2. `apm` should preserve unknown fields.
 3. Platform installation must depend on `deploy:` fields, not on general metadata fields.
 4. Metadata should support local review of lifecycle, history, and sync status.
+5. Treat most non-`deploy` fields as library metadata suggestions, not runtime control fields.
 
 ---
 
@@ -118,15 +128,17 @@ deploy:
 
 Each platform block may include:
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `name` | string | runtime filename and slash-command name |
-| `description` | string | shown to the AI for auto-trigger decisions |
-| `model` | string | e.g. `claude-sonnet-4-6`, `auto`, `gemini-1.5` |
-| `tools` | list | tool permissions e.g. `[Read, Write, Bash]` |
-| `applyTo` | list | file glob scoping e.g. `["**/*.py", "src/**"]` (alias: `paths`) |
-| `tags` | list | categorization / indexing e.g. `["testing", "python"]` |
-| `enabled` | boolean | set `false` to disable this platform without deleting the block |
+| Field | Platforms | Type | Notes |
+|-------|-----------|------|-------|
+| `name` | all | string | runtime filename and slash-command name |
+| `description` | all | string | shown to the AI for auto-trigger decisions |
+| `model` | all | string | e.g. `claude-sonnet-4-6`; `inherit` for Cursor/agents-dir |
+| `tools` | claude-code, codex, gemini | list | tool permissions e.g. `[Read, Write, Bash]` |
+| `applyTo` | agents-dir, codex, gemini | list | file glob scoping e.g. `["**/*.py"]` (alias: `paths`) |
+| `tags` | agents-dir, codex | list | categorization / indexing |
+| `readonly` | cursor | boolean | restrict write permissions (default: `false`) |
+| `is_background` | cursor | boolean | run without blocking parent agent (default: `false`) |
+| `enabled` | all | boolean | set `false` to disable this platform without deleting the block |
 
 `applyTo` / `paths` and `tags` are part of the cross-tool generic frontmatter subset (see §5).
 
@@ -234,4 +246,3 @@ origin: claude-import
 
 - This document is the metadata reference, not the full tool behavior spec.
 - If the metadata model evolves, update this document first, then align `../CLAUDE.md` and `WORKFLOWS.md`.
-

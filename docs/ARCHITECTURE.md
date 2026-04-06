@@ -8,7 +8,22 @@ Main principles:
 - safe for destructive operations
 - easy to extend later
 
-## 1. Architecture Goals
+## 1. Terminology and Domain Model
+
+### The agent vs subagent distinction
+
+> **Important terminology note:** In most AI tools, the word "agent" refers to the **primary/default agent** — the main persona or behavior the tool adopts when you start it (e.g. Claude's base behavior, Cursor's default AI assistant). The `agents/` directories (`~/.claude/agents/`, `~/.cursor/agents/`, etc.) are where **subagents** live — specialized, named agents you can invoke for specific tasks.
+>
+> `apm` manages **subagents** exclusively. When this documentation says "agent", it always means a subagent entry — not the primary agent of any tool.
+
+Domain model:
+
+- **Primary agent:** The main, default behavior of an AI CLI tool (e.g. Claude's base persona). Not managed by `apm`.
+- **Subagent:** A specialized agent file installed in a tool's `agents/` directory (e.g. `@git-mentor`, `@reviewer`). These are what `apm` manages.
+- **Canonical agent:** A subagent definition stored in your local library (`AGENTS_DB`). This is the source of truth.
+- **Runtime agent:** The installed copy of a subagent currently active in an AI tool's runtime directory.
+
+## 2. Architecture Goals
 
 The implementation should optimize for:
 

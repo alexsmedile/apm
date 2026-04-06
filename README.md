@@ -1,8 +1,11 @@
 # apm — Agent Package Manager
+_Write an agent once. Install it everywhere._
 
 A local-first CLI package manager for AI agent prompt files.
 
 `apm` keeps a canonical library of agent definitions and manages their installation into agentic coding CLI tools (e.g. Claude Code, Codex, Gemini, etc.). It handles install, diff, update, import, and optional GitHub sync — all with atomic writes, locking, and backups.
+
+> **agents vs subagents:** In most AI tools, "agent" means the tool's primary AI persona. The `agents/` directories (`~/.claude/agents/`, `~/.cursor/agents/`, etc.) hold **subagents** — specialized, named agents invoked for specific tasks. `apm` manages subagents only.
 
 ## Install
 
@@ -31,7 +34,7 @@ apm import               # import unmanaged runtime agents into library
 ## Library layout
 
 ```
-agents_db/
+agents_library/
   agent-mentor/
     agent-mentor.md
     # root file (personal frontmatter + standard deploy config + body with instructions)
@@ -124,7 +127,7 @@ apm github pull git-mentor   # pull one agent (staged by default)
 - [`docs/TUTORIAL.md`](docs/TUTORIAL.md) — practical getting-started guide for normal users
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — module boundaries and data flow
 - [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) — usability Q&A and edge cases
-- [`docs/AGENT_FRONTMATTER.md`](docs/AGENT_FRONTMATTER.md) — frontmatter schema reference
+- [`docs/AGENT_ENTRY_SCHEMA.md`](docs/AGENT_ENTRY_SCHEMA.md) — library metadata and deploy schema reference
 - [`docs/DATABASE_LIBRARY.md`](docs/DATABASE_LIBRARY.md) — canonical database layout guide
 - [`_archive/`](_archive/) — design specs and historical documents
 
@@ -165,4 +168,3 @@ make lint       # static checks (bash -n, py_compile)
 make install    # install to ~/.local/bin
 make uninstall  # remove symlink
 ```
-

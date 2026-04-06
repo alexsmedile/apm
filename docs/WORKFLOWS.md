@@ -354,7 +354,7 @@ You may want fields like:
 
 See:
 
-- [AGENT_FRONTMATTER.md](AGENT_FRONTMATTER.md)
+- [AGENT_ENTRY_SCHEMA.md](AGENT_ENTRY_SCHEMA.md)
 
 ### Why use `deploy:` inside the root frontmatter?
 
@@ -574,4 +574,3 @@ Setup:
 apm setup                   # first-time or re-configure
 apm github connect          # configure or update GitHub sync
 ```
-

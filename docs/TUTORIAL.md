@@ -9,6 +9,8 @@ For normal users, the mental model is simple:
 3. `apm` can also import unmanaged runtime agents back into your database.
 4. GitHub sync is optional and acts as backup/distribution, not the source of truth.
 
+> **Terminology Note:** In the context of most AI CLI tools (like Claude Code), the word "agent" often refers to the **primary agent** — the default persona you interact with when you start the tool. The individual files managed by `apm` (and stored in the `agents/` directory of those tools) are technically **subagents** that you call upon for specific tasks. When we say "installing an agent" in `apm`, we are typically installing one of these specialized subagents.
+
 This tutorial walks through the normal user journey.
 
 ## 1. Install `apm`
@@ -415,6 +417,6 @@ Common issues:
 - [../README.md](../README.md) — quick overview
 - [WORKFLOWS.md](WORKFLOWS.md) — usability Q&A and edge cases
 - [ARCHITECTURE.md](ARCHITECTURE.md) — module boundaries and data flow
-- [AGENT_FRONTMATTER.md](AGENT_FRONTMATTER.md) — frontmatter schema reference
+- [AGENT_ENTRY_SCHEMA.md](AGENT_ENTRY_SCHEMA.md) — library metadata and deploy schema reference
 - [DATABASE_LIBRARY.md](DATABASE_LIBRARY.md) — canonical database layout guide
 - [../_archive/](../_archive/) — design specs and historical documents
