@@ -18,7 +18,7 @@ The CLI is a hybrid: a shell entrypoint (`apm`) handles orchestration and user i
 Spec files for reference:
 - `docs/spec/SPEC_CONFIG.md`, `SPEC_LIBRARY.md`, `SPEC_STATE.md`, `SPEC_RUNTIME.md`
 - `docs/spec/SPEC_IMPORT.md`, `SPEC_GITHUB.md`, `SPEC_SAFETY.md`, `SPEC_TESTS.md`
-- `docs/ARCHITECTURE.md`, `docs/AGENT_FRONTMATTER.md`, `docs/TUI.md`, `docs/WORKFLOWS.md`
+- `docs/ARCHITECTURE.md`, `docs/AGENT_ENTRY_SCHEMA.md`, `docs/TUI.md`, `docs/WORKFLOWS.md`
 
 ## File Layout
 

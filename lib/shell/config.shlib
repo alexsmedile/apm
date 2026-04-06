@@ -12,7 +12,7 @@ _APM_CONFIG_FILE="${APM_CONFIG_DIR}/config.sh"
 _APM_DEFAULT_PLATFORM="agents-dir"
 _APM_DEFAULT_INSTALL_MODE="copy"
 _APM_DEFAULT_CLAUDE_AGENTS="${HOME}/.claude/agents"
-_APM_DEFAULT_CURSOR_RULES="${HOME}/.cursor/rules"
+_APM_DEFAULT_CURSOR_AGENTS="${HOME}/.cursor/agents"
 _APM_DEFAULT_CODEX_AGENTS="${HOME}/.codex/agents"
 _APM_DEFAULT_GEMINI_MD="${HOME}/.gemini"
 _APM_DEFAULT_WINDSURF_RULES="${HOME}/.windsurf/rules"
@@ -21,6 +21,45 @@ _APM_DEFAULT_AGENTS_DIR="${HOME}/.agents"
 _APM_DEFAULT_GENERIC_EXPORT="${HOME}/Desktop/agents-export"
 _APM_DEFAULT_GITHUB_BRANCH="main"
 
+# Resolve runtime directory and scope for the current platform.
+# Handles global vs project scope detection.
+_apm_resolve_runtime_and_scope() {
+    # 1. Start with the "global" path for the selected platform
+    case "$APM_PLATFORM" in
+        claude-code) APM_RUNTIME_DIR="${APM_CLAUDE_AGENTS}" ;;
+        cursor)      APM_RUNTIME_DIR="${APM_CURSOR_AGENTS}" ;;
+        codex)       APM_RUNTIME_DIR="${APM_CODEX_AGENTS}" ;;
+        gemini)      APM_RUNTIME_DIR="${APM_GEMINI_MD}" ;;
+        windsurf)    APM_RUNTIME_DIR="${APM_WINDSURF_RULES}" ;;
+        continue)    APM_RUNTIME_DIR="${APM_CONTINUE_RULES}" ;;
+        agents-dir)  APM_RUNTIME_DIR="${APM_AGENTS_DIR}" ;;
+        generic)     APM_RUNTIME_DIR="${APM_GENERIC_EXPORT}" ;;
+        *)           APM_RUNTIME_DIR="" ;;
+    esac
+
+    # 2. Detect project scope if not forced global
+    APM_SCOPE="global"
+    if [ "${APM_GLOBAL_FORCE:-0}" != "1" ]; then
+        local _local_dir=""
+        case "$APM_PLATFORM" in
+            claude-code) [ -d "./.claude/agents" ] && _local_dir="./.claude/agents" ;;
+            cursor)      [ -d "./.cursor/agents" ] && _local_dir="./.cursor/agents" ;;
+            codex)       [ -d "./.codex/agents" ]  && _local_dir="./.codex/agents" ;;
+            gemini)      [ -d "./.gemini" ]        && _local_dir="./.gemini" ;;
+            windsurf)    [ -d "./.windsurf/rules" ] && _local_dir="./.windsurf/rules" ;;
+            continue)    [ -d "./.continue/rules" ] && _local_dir="./.continue/rules" ;;
+            agents-dir)  [ -d "./.agents" ]        && _local_dir="./.agents" ;;
+        esac
+
+        if [ -n "$_local_dir" ]; then
+            APM_SCOPE="project"
+            APM_RUNTIME_DIR="$_local_dir"
+        fi
+    fi
+
+    export APM_RUNTIME_DIR APM_SCOPE
+}
+
 # Load config file, apply env overrides, set APM_* variables.
 # Call this early in every command after parsing CLI flags.
 apm_load_config() {
@@ -28,7 +67,7 @@ apm_load_config() {
     _APM_ENV_AGENTS_DB="${AGENTS_DB:-}"
     _APM_ENV_PLATFORM="${PLATFORM:-}"
     _APM_ENV_CLAUDE_AGENTS="${CLAUDE_AGENTS:-}"
-    _APM_ENV_CURSOR_RULES="${CURSOR_RULES:-}"
+    _APM_ENV_CURSOR_AGENTS="${CURSOR_AGENTS:-}"
     _APM_ENV_CODEX_AGENTS="${CODEX_AGENTS:-}"
     _APM_ENV_GEMINI_MD="${GEMINI_MD:-}"
     _APM_ENV_WINDSURF_RULES="${WINDSURF_RULES:-}"
@@ -44,7 +83,7 @@ apm_load_config() {
     # Start with built-in defaults
     APM_PLATFORM="${_APM_DEFAULT_PLATFORM}"
     APM_CLAUDE_AGENTS="${_APM_DEFAULT_CLAUDE_AGENTS}"
-    APM_CURSOR_RULES="${_APM_DEFAULT_CURSOR_RULES}"
+    APM_CURSOR_AGENTS="${_APM_DEFAULT_CURSOR_AGENTS}"
     APM_CODEX_AGENTS="${_APM_DEFAULT_CODEX_AGENTS}"
     APM_GEMINI_MD="${_APM_DEFAULT_GEMINI_MD}"
     APM_WINDSURF_RULES="${_APM_DEFAULT_WINDSURF_RULES}"
@@ -66,7 +105,7 @@ apm_load_config() {
         [ -n "${AGENTS_DB:-}" ]       && APM_AGENTS_DB="${AGENTS_DB}"
         [ -n "${PLATFORM:-}" ]        && APM_PLATFORM="${PLATFORM}"
         [ -n "${CLAUDE_AGENTS:-}" ]   && APM_CLAUDE_AGENTS="${CLAUDE_AGENTS}"
-        [ -n "${CURSOR_RULES:-}" ]    && APM_CURSOR_RULES="${CURSOR_RULES}"
+        [ -n "${CURSOR_AGENTS:-}" ]    && APM_CURSOR_AGENTS="${CURSOR_AGENTS}"
         [ -n "${CODEX_AGENTS:-}" ]    && APM_CODEX_AGENTS="${CODEX_AGENTS}"
         [ -n "${GEMINI_MD:-}" ]       && APM_GEMINI_MD="${GEMINI_MD}"
         [ -n "${WINDSURF_RULES:-}" ]  && APM_WINDSURF_RULES="${WINDSURF_RULES}"
@@ -85,7 +124,7 @@ apm_load_config() {
     [ -n "${_APM_ENV_AGENTS_DB:-}" ]        && APM_AGENTS_DB="${_APM_ENV_AGENTS_DB}"
     [ -n "${_APM_ENV_PLATFORM:-}" ]         && APM_PLATFORM="${_APM_ENV_PLATFORM}"
     [ -n "${_APM_ENV_CLAUDE_AGENTS:-}" ]    && APM_CLAUDE_AGENTS="${_APM_ENV_CLAUDE_AGENTS}"
-    [ -n "${_APM_ENV_CURSOR_RULES:-}" ]     && APM_CURSOR_RULES="${_APM_ENV_CURSOR_RULES}"
+    [ -n "${_APM_ENV_CURSOR_AGENTS:-}" ]     && APM_CURSOR_AGENTS="${_APM_ENV_CURSOR_AGENTS}"
     [ -n "${_APM_ENV_CODEX_AGENTS:-}" ]     && APM_CODEX_AGENTS="${_APM_ENV_CODEX_AGENTS}"
     [ -n "${_APM_ENV_GEMINI_MD:-}" ]        && APM_GEMINI_MD="${_APM_ENV_GEMINI_MD}"
     [ -n "${_APM_ENV_WINDSURF_RULES:-}" ]   && APM_WINDSURF_RULES="${_APM_ENV_WINDSURF_RULES}"
@@ -98,23 +137,13 @@ apm_load_config() {
     [ -n "${_APM_ENV_GITHUB_MONOREPO:-}" ]  && APM_GITHUB_MONOREPO="${_APM_ENV_GITHUB_MONOREPO}"
     [ -n "${_APM_ENV_GITHUB_BRANCH:-}" ]    && APM_GITHUB_BRANCH="${_APM_ENV_GITHUB_BRANCH}"
 
-    # Resolve runtime directory for current platform
-    case "$APM_PLATFORM" in
-        claude-code) APM_RUNTIME_DIR="${APM_CLAUDE_AGENTS}" ;;
-        cursor)      APM_RUNTIME_DIR="${APM_CURSOR_RULES}" ;;
-        codex)       APM_RUNTIME_DIR="${APM_CODEX_AGENTS}" ;;
-        gemini)      APM_RUNTIME_DIR="${APM_GEMINI_MD}" ;;
-        windsurf)    APM_RUNTIME_DIR="${APM_WINDSURF_RULES}" ;;
-        continue)    APM_RUNTIME_DIR="${APM_CONTINUE_RULES}" ;;
-        agents-dir)  APM_RUNTIME_DIR="${APM_AGENTS_DIR}" ;;
-        generic)     APM_RUNTIME_DIR="${APM_GENERIC_EXPORT}" ;;
-        *)           APM_RUNTIME_DIR="" ;;
-    esac
+    # Resolve runtime directory and scope for the platform
+    _apm_resolve_runtime_and_scope
 
-    export APM_AGENTS_DB APM_PLATFORM APM_CLAUDE_AGENTS APM_CURSOR_RULES \
+    export APM_AGENTS_DB APM_PLATFORM APM_CLAUDE_AGENTS APM_CURSOR_AGENTS \
            APM_CODEX_AGENTS APM_GEMINI_MD APM_WINDSURF_RULES APM_CONTINUE_RULES \
            APM_AGENTS_DIR APM_INSTALL_MODE APM_GENERIC_EXPORT APM_GITHUB_MODE \
-           APM_GITHUB_OWNER APM_GITHUB_MONOREPO APM_GITHUB_BRANCH APM_RUNTIME_DIR
+           APM_GITHUB_OWNER APM_GITHUB_MONOREPO APM_GITHUB_BRANCH
 }
 
 # Apply CLI flag overrides (call after apm_load_config)
@@ -123,19 +152,11 @@ apm_apply_cli_overrides() {
     [ -n "${_CLI_DB:-}" ]           && APM_AGENTS_DB="${_CLI_DB}"
     [ -n "${_CLI_PLATFORM:-}" ]     && APM_PLATFORM="${_CLI_PLATFORM}"
     [ -n "${_CLI_INSTALL_MODE:-}" ] && APM_INSTALL_MODE="${_CLI_INSTALL_MODE}"
-    # Re-resolve runtime dir after platform override
-    case "$APM_PLATFORM" in
-        claude-code) APM_RUNTIME_DIR="${APM_CLAUDE_AGENTS}" ;;
-        cursor)      APM_RUNTIME_DIR="${APM_CURSOR_RULES}" ;;
-        codex)       APM_RUNTIME_DIR="${APM_CODEX_AGENTS}" ;;
-        gemini)      APM_RUNTIME_DIR="${APM_GEMINI_MD}" ;;
-        windsurf)    APM_RUNTIME_DIR="${APM_WINDSURF_RULES}" ;;
-        continue)    APM_RUNTIME_DIR="${APM_CONTINUE_RULES}" ;;
-        agents-dir)  APM_RUNTIME_DIR="${APM_AGENTS_DIR}" ;;
-        generic)     APM_RUNTIME_DIR="${APM_GENERIC_EXPORT}" ;;
-        *)           APM_RUNTIME_DIR="" ;;
-    esac
-    export APM_AGENTS_DB APM_PLATFORM APM_RUNTIME_DIR
+    
+    # Re-resolve runtime and scope after platform override
+    _apm_resolve_runtime_and_scope
+
+    export APM_AGENTS_DB APM_PLATFORM
 }
 
 # Interactive setup wizard — creates ~/.config/apm/config.sh
@@ -248,7 +269,7 @@ AGENTS_DB="${_db}"
 PLATFORM="${_platform}"
 INSTALL_MODE="${_install_mode}"
 CLAUDE_AGENTS="\${HOME}/.claude/agents"
-CURSOR_RULES="\${HOME}/.cursor/rules"
+CURSOR_AGENTS="\${HOME}/.cursor/agents"
 CODEX_AGENTS="\${HOME}/.codex/agents"
 GEMINI_MD="\${HOME}/.gemini"
 WINDSURF_RULES="\${HOME}/.windsurf/rules"

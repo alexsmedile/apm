@@ -43,10 +43,10 @@
 
 ### Testing & Validation
 - **Regression Testing:** Every new feature or bug fix must be accompanied by a test case in `tests/`.
-- **Validation Engine:** Use `cmd_validate` (or `_apm_py validate-agent`) to ensure agents conform to the schema defined in `docs/AGENT_FRONTMATTER.md`.
+- **Validation Engine:** Use `cmd_validate` (or `_apm_py validate-agent`) to ensure agents conform to the schema defined in `docs/AGENT_ENTRY_SCHEMA.md`.
 - **Playground:** Use `tests/fakeagents-db/` for manual testing and verification of GitHub sync logic.
 
 ### Documentation Reference
 - `ARCHITECTURE.md`: High-level system design and module boundaries.
 - `SPEC_*.md` (in `docs/spec/`): Detailed implementation rules for each subsystem.
-- `AGENT_FRONTMATTER.md`: Schema reference for agent definition files.
+- `AGENT_ENTRY_SCHEMA.md`: Schema reference for agent library metadata and deploy fields.

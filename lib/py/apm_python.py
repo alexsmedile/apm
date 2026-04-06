@@ -169,6 +169,9 @@ def extract_deploy(fm: dict, platform: str) -> dict:
         'tools': normalize_tools(plat_block.get('tools')),
         'applyTo': plat_block.get('applyTo', plat_block.get('paths', [])) or [],
         'tags': plat_block.get('tags', []) or [],
+        # Cursor-specific fields
+        'readonly': plat_block.get('readonly', None),
+        'is_background': plat_block.get('is_background', None),
     }
 
 
@@ -797,17 +800,38 @@ def generate_runtime_content(agent_id: str, db_path: str, platform: str) -> dict
     rt_fm['name'] = deploy.get('name', agent_id)
     if deploy.get('description'):
         rt_fm['description'] = deploy['description']
-    if deploy.get('model'):
-        rt_fm['model'] = deploy['model']
-    tools = deploy.get('tools', [])
-    if tools:
-        rt_fm['tools'] = tools
-    apply_to = deploy.get('applyTo', [])
-    if apply_to:
-        rt_fm['applyTo'] = apply_to
-    tags = deploy.get('tags', [])
-    if tags:
-        rt_fm['tags'] = tags
+
+    # Platform-aware frontmatter fields
+    if platform == 'cursor':
+        # Cursor subagents: model (default inherit), readonly, is_background
+        rt_fm['model'] = deploy.get('model') or 'inherit'
+        if deploy.get('readonly') is not None:
+            rt_fm['readonly'] = deploy['readonly']
+        if deploy.get('is_background') is not None:
+            rt_fm['is_background'] = deploy['is_background']
+    elif platform == 'agents-dir':
+        # Generic cross-tool: model defaults to inherit, applyTo, tags
+        model = deploy.get('model')
+        rt_fm['model'] = model if model else 'inherit'
+        apply_to = deploy.get('applyTo', [])
+        if apply_to:
+            rt_fm['applyTo'] = apply_to
+        tags = deploy.get('tags', [])
+        if tags:
+            rt_fm['tags'] = tags
+    else:
+        # Claude Code and others: model optional, tools, applyTo, tags
+        if deploy.get('model'):
+            rt_fm['model'] = deploy['model']
+        tools = deploy.get('tools', [])
+        if tools:
+            rt_fm['tools'] = tools
+        apply_to = deploy.get('applyTo', [])
+        if apply_to:
+            rt_fm['applyTo'] = apply_to
+        tags = deploy.get('tags', [])
+        if tags:
+            rt_fm['tags'] = tags
     rt_fm['apm'] = {
         'id': agent_id,
         'platform': platform,
@@ -980,7 +1004,7 @@ def build_import_draft(runtime_file: str, candidate_id: str, db_path: str,
 
     stage_dir = os.path.join(db_path, '_imports', f'{candidate_id}-{timestamp}')
 
-    # Derive deploy block from runtime frontmatter (AGENT_FRONTMATTER.md §5)
+    # Derive deploy block from runtime frontmatter (AGENT_ENTRY_SCHEMA.md §5)
     deploy_cfg: dict = {}
     name = rt_fm.get('name', candidate_id)
     description = rt_fm.get('description', '')
@@ -998,7 +1022,7 @@ def build_import_draft(runtime_file: str, candidate_id: str, db_path: str,
         if tools:
             deploy_cfg[platform]['tools'] = tools
 
-    # Build root frontmatter (AGENT_FRONTMATTER.md import defaults)
+    # Build root frontmatter (AGENT_ENTRY_SCHEMA.md import defaults)
     import_date = timestamp[:10]  # YYYY-MM-DD
     root_fm: dict = {}
     root_fm['id'] = candidate_id

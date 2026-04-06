@@ -52,6 +52,7 @@ _CLI_INSTALL_MODE=""
 APM_JSON_MODE=0
 APM_DRY_RUN=0
 APM_FORCE=0
+APM_GLOBAL_FORCE=0
 
 _apm_parse_global_flags() {
     while [[ $# -gt 0 ]]; do
@@ -65,6 +66,7 @@ _apm_parse_global_flags() {
             --json)          APM_JSON_MODE=1; export APM_JSON_MODE; shift ;;
             --dry-run)       APM_DRY_RUN=1; shift ;;
             --force)         APM_FORCE=1; shift ;;
+            --global|-g)     APM_GLOBAL_FORCE=1; export APM_GLOBAL_FORCE; shift ;;
             --install-mode)
                 [ $# -lt 2 ] && apm_die 2 "--install-mode requires a value (copy|symlink)"
                 _CLI_INSTALL_MODE="$2"; shift 2 ;;
@@ -87,6 +89,57 @@ cmd_setup() {
     return $_wizard_status
 }
 
+cmd_init() {
+    local target_plat="${APM_PLATFORM}"
+    
+    # Parse --platform if provided
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --platform) [ $# -lt 2 ] && apm_die 2 "--platform requires a value"; target_plat="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    local local_dir=""
+    case "$target_plat" in
+        claude-code) local_dir="./.claude/agents" ;;
+        cursor)      local_dir="./.cursor/agents" ;;
+        codex)       local_dir="./.codex/agents" ;;
+        gemini)      local_dir="./.gemini" ;;
+        windsurf)    local_dir="./.windsurf/rules" ;;
+        continue)    local_dir="./.continue/rules" ;;
+        agents-dir)  local_dir="./.agents" ;;
+        *)           apm_die 2 "Initialization not supported for platform: $target_plat" ;;
+    esac
+
+    echo ""
+    echo "  Initializing project scope for platform: $target_plat"
+    echo "  Target directory: $local_dir"
+    echo ""
+
+    if [ -d "$local_dir" ]; then
+        echo "  Directory already exists. Nothing to do."
+        echo ""
+        return 0
+    fi
+
+    if [ "$APM_FORCE" != "1" ]; then
+        printf "  Create this directory? [y/N] "
+        read -r _confirm
+        case "$_confirm" in
+            [yY]*) ;;
+            *) echo "  Cancelled."; echo ""; return 0 ;;
+        esac
+    fi
+
+    mkdir -p "$local_dir" || apm_die 2 "Failed to create directory: $local_dir"
+    
+    echo ""
+    echo "  Success! apm will now use project scope for $target_plat in this directory."
+    echo "  To force global scope later, use the -g or --global flag."
+    echo ""
+}
+
 cmd_config() {
     if [ "$APM_JSON_MODE" -eq 1 ]; then
         python3 -c "
@@ -94,9 +147,10 @@ import json, sys
 print(json.dumps({
     'agents_db':       '${APM_AGENTS_DB}',
     'platform':        '${APM_PLATFORM}',
+    'scope':           '${APM_SCOPE}',
     'runtime_dir':     '${APM_RUNTIME_DIR}',
     'claude_agents':   '${APM_CLAUDE_AGENTS}',
-    'cursor_rules':    '${APM_CURSOR_RULES}',
+    'cursor_agents':   '${APM_CURSOR_AGENTS}',
     'codex_agents':    '${APM_CODEX_AGENTS}',
     'gemini_md':       '${APM_GEMINI_MD}',
     'windsurf_rules':  '${APM_WINDSURF_RULES}',
@@ -118,11 +172,12 @@ print(json.dumps({
     echo "Config file : ${_APM_CONFIG_FILE}"
     echo ""
     echo "  Platform        : ${APM_PLATFORM}"
+    echo "  Scope           : ${APM_SCOPE}"
     echo "  Library (db)    : ${APM_AGENTS_DB:-<not set>}"
     echo "  Runtime dir     : ${APM_RUNTIME_DIR:-<not set>}"
     echo ""
     echo "  Claude agents   : ${APM_CLAUDE_AGENTS}"
-    echo "  Cursor rules    : ${APM_CURSOR_RULES}"
+    echo "  Cursor agents   : ${APM_CURSOR_AGENTS}"
     echo "  Codex agents    : ${APM_CODEX_AGENTS}"
     echo "  Gemini dir      : ${APM_GEMINI_MD}"
     echo "  Windsurf rules  : ${APM_WINDSURF_RULES}"
@@ -159,6 +214,39 @@ cmd_validate() {
 }
 
 cmd_list() {
+    local query=""
+    local force_global=0
+    local force_project=0
+    local filter_platform=""
+
+    # Parse command-specific flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --global|-g) force_global=1; shift ;;
+            --project)   force_project=1; shift ;;
+            -a|--alias|--platform) [ $# -lt 2 ] && apm_die 2 "$1 requires a value"; filter_platform="$2"; shift 2 ;;
+            -*)          apm_die 2 "Unknown flag for list: $1" ;;
+            *)           [ -z "$query" ] && query="$1"; shift ;;
+        esac
+    done
+
+    # If scope overrides are requested, re-resolve temporarily
+    local old_global_force="${APM_GLOBAL_FORCE:-0}"
+    local old_runtime_dir="${APM_RUNTIME_DIR:-}"
+    local old_scope="${APM_SCOPE:-}"
+
+    if [ "$force_global" -eq 1 ]; then
+        APM_GLOBAL_FORCE=1
+        _apm_resolve_runtime_and_scope
+    elif [ "$force_project" -eq 1 ]; then
+        # Forcing project means ignoring global force if it was set
+        APM_GLOBAL_FORCE=0
+        _apm_resolve_runtime_and_scope
+        if [ "$APM_SCOPE" != "project" ]; then
+            apm_warn "Project scope requested but no local agents directory found."
+        fi
+    fi
+
     if [ -z "$APM_AGENTS_DB" ]; then
         apm_die 2 "No library path configured. Run: apm setup"
     fi
@@ -172,19 +260,71 @@ cmd_list() {
 
     if [ "$APM_JSON_MODE" = "1" ]; then
         echo "$out"
+        # Restore state if changed
+        APM_GLOBAL_FORCE="$old_global_force"
+        APM_RUNTIME_DIR="$old_runtime_dir"
+        APM_SCOPE="$old_scope"
         return $exit_code
     fi
 
     # Human-readable output matching TUI.md §9
     echo ""
     printf "  %-14s : %s\n" "Platform" "$APM_PLATFORM"
+    printf "  %-14s : %s\n" "Scope" "$APM_SCOPE"
     printf "  %-14s : %s\n" "Library" "$APM_AGENTS_DB"
+    printf "  %-14s : %s\n" "Runtime dir" "$APM_RUNTIME_DIR"
     [ -n "$APM_GITHUB_MODE" ] && printf "  %-14s : %s\n" "GitHub mode" "$APM_GITHUB_MODE"
+    [ -n "$query" ] && printf "  %-14s : %s\n" "Query" "$query"
+    [ -n "$filter_platform" ] && printf "  %-14s : %s\n" "Platform filter" "$filter_platform"
     echo ""
     echo "$out" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 agents = data.get('agents', [])
+query = \"$query\".lower()
+fplat = \"$filter_platform\".lower()
+
+def match(a, q, fp):
+    if fp:
+        # Check if deploy config exists and is enabled for this platform
+        # The Python helper returns manifest for THE current platform,
+        # but we can check the root_meta or deploy if we had all platforms.
+        # WAIT: the status-agents call only returns info for ONE platform at a time.
+        # If we want to filter by platform across all platforms, we need a different helper.
+        # HOWEVER, the reference npx skills ls -a <platform> implies listing agents
+        # THAT ARE COMPATIBLE with that platform.
+        pass
+
+    if not q: return True
+    # check ID
+    if q in str(a.get('id', '') or '').lower(): return True
+    # check root meta (name, description)
+    rm = a.get('root_meta') or {}
+    if q in str(rm.get('name', '') or '').lower(): return True
+    if q in str(rm.get('description', '') or '').lower(): return True
+    # check deploy config (name, description)
+    dep = a.get('deploy') or {}
+    if q in str(dep.get('name', '') or '').lower(): return True
+    if q in str(dep.get('description', '') or '').lower(): return True
+    return False
+
+if query:
+    agents = [a for a in agents if match(a, query, fplat)]
+
+# If platform filter is provided, we actually need to re-scan with that platform context
+# if we want accurate 'sync' state for THAT platform.
+# For now, we'll just filter the current list if it has a deploy block for it.
+if fplat:
+    # This is tricky because build-manifest (used by status-agents) only targets ONE platform.
+    # We'll rely on root_meta.deploy.<fplat> existence.
+    agents = [a for a in agents if fplat in (a.get('root_meta',{}).get('deploy',{}) or {})]
+
+if not agents:
+    if query:
+        print(f\"  No agents found matching query: {query}\")
+    else:
+        print(\"  (no agents found)\")
+    sys.exit(0)
 
 # Sort order per TUI.md §9: collision, untracked, outdated, ready, orphan, in-sync, no-deploy
 ORDER = {
@@ -222,22 +362,112 @@ STATE_COLOR = {
     'collision':         C['bold'] + C['red'],
     'no-deploy':         C['dim'],
 }
+
+show_cat = any(a.get('category') for a in agents)
+for a in agents:
+    sync  = a.get('state', {}).get('sync', '?')
+    aid   = a.get('id', '?')
+    cat   = a.get('category', '') or ''
+    sym   = symbols.get(sync, '  ?')
+    color = STATE_COLOR.get(sync, '')
+    reset = C['reset'] if color else ''
+    cat_col = f'  {cat:<16}' if show_cat else ''
+    print(f'{color}{sym}  {aid:<28}{cat_col}  {sync}{reset}')
+    "
+    echo ""
+
+    # Restore state
+    APM_GLOBAL_FORCE="$old_global_force"
+    APM_RUNTIME_DIR="$old_runtime_dir"
+    APM_SCOPE="$old_scope"
+
+    return $exit_code
+    }
+cmd_find() {
+    local query="${1:-}"
+
+    if [ -n "$query" ]; then
+        cmd_list "$query"
+        return $?
+    fi
+
+    # Interactive mode
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    local _ids
+    _ids=$(_apm_py list-agents --db "$APM_AGENTS_DB" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(a['id']) for a in d['agents']]")
+    
+    if [ -z "$_ids" ]; then
+        echo "  No agents found in library."
+        return 0
+    fi
+
+    local _selected=""
+    if command -v fzf >/dev/null 2>&1; then
+        _selected=$(echo "$_ids" | fzf --header "Select an agent to view details" --height 40% --reverse)
+    else
+        # Fallback to numbered menu
+        echo ""
+        echo "  Select an agent:"
+        local i=1
+        local id_arr=()
+        while IFS= read -r aid; do
+            printf "  %2d) %s\n" "$i" "$aid"
+            id_arr+=("$aid")
+            i=$((i + 1))
+        done <<< "$_ids"
+        printf "  Choice [1-%d]: " "$((i - 1))"
+        read -r _choice
+        if [[ "$_choice" =~ ^[0-9]+$ ]] && [ "$_choice" -ge 1 ] && [ "$_choice" -lt "$i" ]; then
+            _selected="${id_arr[$((_choice - 1))]}"
+        fi
+    fi
+
+    if [ -n "$_selected" ]; then
+        echo ""
+        echo "  --- Details for $_selected ---"
+        cmd_diff "$_selected"
+    fi
+}
+
+cmd_check() {
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    local out
+    out=$(_apm_py status-agents \
+        --db "$APM_AGENTS_DB" \
+        --platform "$APM_PLATFORM" \
+        --runtime-dir "$APM_RUNTIME_DIR")
+    
+    echo ""
+    echo "  Actionable Agents (outdated, unmanaged, ready):"
+    echo ""
+    echo "$out" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+agents = [a for a in data.get('agents', []) if a.get('state',{}).get('sync') in ('outdated', 'unmanaged', 'orphan', 'ready')]
+
 if not agents:
-    print('  (no agents found)')
-else:
-    show_cat = any(a.get('category') for a in agents)
-    for a in agents:
-        sync  = a.get('state', {}).get('sync', '?')
-        aid   = a.get('id', '?')
-        cat   = a.get('category', '') or ''
-        sym   = symbols.get(sync, '  ?')
-        color = STATE_COLOR.get(sync, '')
-        reset = C['reset'] if color else ''
-        cat_col = f'  {cat:<16}' if show_cat else ''
-        print(f'{color}{sym}  {aid:<28}{cat_col}  {sync}{reset}')
+    print(\"  Everything is in-sync.\")
+    sys.exit(0)
+
+# Sort
+ORDER = {'unmanaged': 0, 'outdated': 1, 'ready': 2, 'orphan': 3}
+agents.sort(key=lambda a: ORDER.get(a.get('state',{}).get('sync',''), 99))
+
+for a in agents:
+    state = a.get('state',{}).get('sync')
+    aid = a['id']
+    print(f\"  [{state:<10}] {aid}\")
+
+print()
+print(f\"  Summary: {len([a for a in agents if a.get('state',{}).get('sync')=='outdated'])} outdated, {len([a for a in agents if a.get('state',{}).get('sync')=='unmanaged'])} unmanaged, {len([a for a in agents if a.get('state',{}).get('sync')=='ready'])} ready.\")
 "
     echo ""
-    return $exit_code
 }
 
 cmd_status() {
@@ -554,8 +784,18 @@ for a in d.get('agents',[]):
     printf "  %-10s : %s\n" "Target" "$runtime_file"
     echo ""
 
-    # --dry-run: show only, don't write
+    # --dry-run: show content and header, don't write
     if [ "$APM_DRY_RUN" = "1" ]; then
+        local _dry_content
+        _dry_content=$(_apm_py generate-runtime \
+            --id "$id" \
+            --db "$APM_AGENTS_DB" \
+            --platform "$APM_PLATFORM")
+        
+        echo "  --- Generated Content (Dry Run) ---"
+        echo "$_dry_content" | python3 -c "import json,sys; print(json.load(sys.stdin).get('content',''))"
+        echo "  --- End of Content ---"
+        echo ""
         echo "  (dry run — nothing written)"
         echo ""
         return 0
@@ -2046,7 +2286,7 @@ for a in d.get('agents',[]):
 # ---------------------------------------------------------------------------
 
 _apm_interactive_dashboard() {
-    apm_header "apm  (platform: ${APM_PLATFORM})"
+    apm_header "apm  (platform: ${APM_PLATFORM} | scope: ${APM_SCOPE})"
 
     local out
     out=$(_apm_py status-agents \
@@ -2058,32 +2298,40 @@ _apm_interactive_dashboard() {
     }
 
     echo "$out" | python3 -c "
-import json, sys
+import json, sys, os
 data = json.load(sys.stdin)
 agents = data.get('agents', [])
+rdir = \"$APM_RUNTIME_DIR\"
+scope = \"$APM_SCOPE\"
+
 ready = [a for a in agents if a.get('state',{}).get('sync') in ('ready','outdated')]
-in_sync = [a for a in agents if a.get('state',{}).get('sync') == 'in-sync']
 untracked = [a for a in agents if a.get('state',{}).get('sync') == 'unmanaged']
 collisions = [a for a in agents if a.get('state',{}).get('sync') == 'collision']
+in_sync = [a for a in agents if a.get('state',{}).get('sync') == 'in-sync']
 
-print(f'  agents: {len(agents)} total, {len(in_sync)} in-sync, {len(ready)} actionable, {len(untracked)} untracked')
+print(f'  Agents: {len(agents)} total, {len(in_sync)} in-sync, {len(ready)} actionable, {len(untracked)} untracked')
+print(f'  Runtime: {rdir} ({scope})')
 print()
+
 if ready:
     print('  Actionable:')
     for a in ready:
         sync = a.get('state',{}).get('sync','?')
-        print(f'    ~  {a[\"id\"]}  ({sync})')
+        print(f'    ~  {a[\"id\"]:<24}  ({sync})')
     print()
+
 if untracked:
     print('  Untracked runtime agents:')
     for a in untracked:
-        print(f'    *  {a[\"id\"]}')
+        print(f'    !  {a[\"id\"]}')
     print()
+
 if collisions:
     print('  Collisions (run apm validate):')
     for a in collisions:
-        print(f'    !  {a[\"id\"]}')
+        print(f'    x  {a[\"id\"]}')
     print()
+
 if not agents:
     print('  (no agents in library)')
     print()
@@ -2113,11 +2361,16 @@ cmd_interactive() {
     fi
 
     _apm_interactive_dashboard
-    echo "  Commands: list  status  diff <id>  install <id> [id…]  install --all  install --cat <name>"
-    echo "            remove <id>  update [id]  import [id]  validate [id]  github <sub>  setup  help  quit"
+    echo "  Shortcuts: [u]pdate  [i]mport  [l]ist  [s]tatus  [f]ind  [q]uit"
+    echo "  Commands : list  find  status  check  diff <id>  install <id> [id…]  install --all"
+    echo "             install --cat <name>  remove <id>  update [id]  import [id]  github <sub>"
+    echo "             setup  help  quit"
     echo ""
 
     while true; do
+        # Use -n 1 for single key, but only if we're at the root level.
+        # This is a bit complex in pure bash without a specialized loop.
+        # We'll stick to standard read for now but allow single-char commands.
         printf "apm> "
         read -r _line || break   # EOF (Ctrl-D) exits
         _line="${_line#"${_line%%[![:space:]]*}"}"  # trim leading whitespace
@@ -2133,13 +2386,30 @@ cmd_interactive() {
             quit|exit|q)
                 echo ""
                 break ;;
+            u)
+                echo "  Updating all agents..."
+                cmd_update
+                _apm_interactive_dashboard ;;
+            i)
+                cmd_import
+                _apm_interactive_dashboard ;;
+            l)
+                cmd_list
+                echo "" ;;
+            s)
+                cmd_status ;;
+            f)
+                cmd_find
+                echo "" ;;
             help|h|\?)
                 echo ""
-                echo "  list               List all agents and their sync state"
+                echo "  list [query]       List all agents and their sync state (alias: ls)"
+                echo "  find <query>       Search for agents by keyword"
                 echo "  status             Show counts by state"
+                echo "  check              Show summary of actionable agents"
                 echo "  diff <id>          Diff library vs runtime for an agent"
                 echo "  install <id|--all|--cat <cat>>  Install agent(s) to runtime"
-                echo "  remove <id>        Remove agent from runtime"
+                echo "  remove <id>        Remove agent from runtime (alias: rm)"
                 echo "  update [id]        Reinstall outdated agents (all or one)"
                 echo "  import [id|path]   Import runtime agent into library"
                 echo "  validate [id]      Validate agent(s)"
@@ -2150,10 +2420,14 @@ cmd_interactive() {
                 echo "" ;;
             refresh|r)
                 _apm_interactive_dashboard ;;
-            list)
-                cmd_list ;;
+            list|ls)
+                cmd_list "$_iargs" ;;
+            find)
+                cmd_find "$_iargs" ;;
             status)
                 cmd_status ;;
+            check)
+                cmd_check ;;
             diff)
                 [ -z "$_iargs" ] && { echo "  Usage: diff <id>"; continue; }
                 cmd_diff "$_iargs" ;;
@@ -2161,7 +2435,7 @@ cmd_interactive() {
                 [ -z "$_iargs" ] && { echo "  Usage: install <id|--all|--cat <category>>"; continue; }
                 # shellcheck disable=SC2086
                 cmd_install $_iargs ;;
-            remove)
+            remove|rm)
                 [ -z "$_iargs" ] && { echo "  Usage: remove <id>"; continue; }
                 cmd_remove "$_iargs" ;;
             update)
@@ -2211,17 +2485,26 @@ main() {
         setup)
             cmd_setup
             ;;
+        init)
+            cmd_init "${_REMAINING_ARGS[@]:1}"
+            ;;
         config)
             cmd_config
             ;;
         validate)
             cmd_validate "${_REMAINING_ARGS[1]:-}"
             ;;
-        list)
-            cmd_list
+        list|ls)
+            cmd_list "${_REMAINING_ARGS[1]:-}"
+            ;;
+        find)
+            cmd_find "${_REMAINING_ARGS[1]:-}"
             ;;
         status)
             cmd_status
+            ;;
+        check)
+            cmd_check
             ;;
         diff)
             cmd_diff "${_REMAINING_ARGS[1]:-}"
@@ -2229,7 +2512,7 @@ main() {
         install)
             cmd_install "${_REMAINING_ARGS[@]:1}"
             ;;
-        remove)
+        remove|rm)
             cmd_remove "${_REMAINING_ARGS[1]:-}"
             ;;
         update)
@@ -2251,21 +2534,25 @@ Usage:
 Global flags:
   --db <path>        Override library database path
   --platform <name>  Override platform (claude-code, cursor, codex, gemini, generic)
+  --global, -g       Force global scope (ignore local .claude/ etc)
   --json             Machine-readable JSON output
   --dry-run          Show what would happen without doing it
   --force            Skip confirmation prompts
 
 Commands:
   setup                        Configure apm (interactive wizard)
+  init [--platform <name>]     Initialize local project scope
   config                       Show resolved configuration
   validate [id]                Validate agent(s) in the library
-  list                         List agents with sync state and category
+  list [query] [--global|--project] [-a <platform>] List agents with sync state and category (alias: ls)
+  find [query]                 Search for agents by keyword
   status                       Show counts by sync state
+  check                        Show summary of actionable agents
   diff <id>                    Show diff between library and runtime
   install <id> [id…]           Install one or more agents by ID
   install --all                Install all ready/outdated agents
   install --cat <name>         Install all agents in a category
-  remove <id>                  Remove agent from runtime
+  remove <id>                  Remove agent from runtime (alias: rm)
   update [id]                  Reinstall outdated agents (all if no id given)
   import                       Pick from unmanaged runtime agents (interactive)
   import [id]                  Import specific agent, or --all for everything
