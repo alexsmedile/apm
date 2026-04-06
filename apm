@@ -262,6 +262,40 @@ cmd_list() {
         --runtime-dir "$APM_RUNTIME_DIR")
     local exit_code=$?
 
+    # Apply query and platform filter to the raw JSON (shared by both output modes)
+    if [ -n "$query" ] || [ -n "$filter_platform" ]; then
+        out=$(echo "$out" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+agents = data.get('agents', [])
+query = '${query}'.lower()
+fplat = '${filter_platform}'.lower()
+
+if query:
+    agents = [a for a in agents if
+        query in str(a.get('id','') or '').lower() or
+        query in str((a.get('root_meta') or {}).get('name','') or '').lower() or
+        query in str((a.get('root_meta') or {}).get('description','') or '').lower() or
+        query in str((a.get('deploy') or {}).get('name','') or '').lower() or
+        query in str((a.get('deploy') or {}).get('description','') or '').lower()]
+
+if fplat:
+    def _has_deploy(a, platform):
+        deploy = ((a.get('root_meta') or {}).get('deploy') or {})
+        plat_block = deploy.get(platform) or {}
+        if plat_block and plat_block.get('enabled', True) is not False:
+            return True
+        if platform == 'agents-dir':
+            return any(isinstance(v, dict) and v.get('enabled', True) is not False
+                       for v in deploy.values())
+        return False
+    agents = [a for a in agents if _has_deploy(a, fplat)]
+
+data['agents'] = agents
+print(json.dumps(data))
+")
+    fi
+
     if [ "$APM_JSON_MODE" = "1" ]; then
         echo "$out"
         # Restore state if changed
@@ -285,42 +319,6 @@ cmd_list() {
 import json, sys
 data = json.load(sys.stdin)
 agents = data.get('agents', [])
-query = \"$query\".lower()
-fplat = \"$filter_platform\".lower()
-
-def match(a, q, fp):
-    if not q and not fp: return True
-    if not q: q = ''
-    if not fp: fp = ''
-    # check ID
-    if q in str(a.get('id', '') or '').lower(): return True
-    # check root meta (name, description)
-    rm = a.get('root_meta') or {}
-    if q in str(rm.get('name', '') or '').lower(): return True
-    if q in str(rm.get('description', '') or '').lower(): return True
-    # check deploy config (name, description)
-    dep = a.get('deploy') or {}
-    if q in str(dep.get('name', '') or '').lower(): return True
-    if q in str(dep.get('description', '') or '').lower(): return True
-    return False
-
-if query:
-    agents = [a for a in agents if match(a, query, '')]
-
-if fplat:
-    def _has_deploy(a, platform):
-        deploy = (a.get('root_meta', {}) or {}).get('deploy', {}) or {}
-        plat_block = deploy.get(platform, {}) or {}
-        if plat_block and plat_block.get('enabled', True) is not False:
-            return True
-        # agents-dir fallback: any agent with at least one enabled deploy block
-        if platform == 'agents-dir':
-            return any(
-                isinstance(v, dict) and v.get('enabled', True) is not False
-                for v in deploy.values()
-            )
-        return False
-    agents = [a for a in agents if _has_deploy(a, fplat)]
 
 if not agents:
     if query:
@@ -676,16 +674,21 @@ for i in ids: print(i)
 
     # Multiple IDs: apm install gino pino ...
     if [ $# -gt 1 ] && [ "$id" != "--all" ]; then
-        local _multi_ok=0 _multi_fail=0
+        local _multi_ok=0 _multi_fail=0 _multi_ids='[]'
+        local _saved_json_mode="$APM_JSON_MODE"
         for _mid in "$@"; do
+            # Suppress per-item JSON output in JSON mode; collect results manually
+            [ "$APM_JSON_MODE" = "1" ] && APM_JSON_MODE=0
             if cmd_install "$_mid"; then
                 _multi_ok=$((_multi_ok + 1))
+                _multi_ids=$(python3 -c "import json,sys; a=json.loads('$_multi_ids'); a.append('$_mid'); print(json.dumps(a))")
             else
                 _multi_fail=$((_multi_fail + 1))
             fi
+            APM_JSON_MODE="$_saved_json_mode"
         done
         if [ "$APM_JSON_MODE" = "1" ]; then
-            echo "{\"command\":\"install\",\"installed\":$_multi_ok,\"failed\":$_multi_fail}"
+            echo "{\"command\":\"install\",\"ids\":$_multi_ids,\"installed\":$_multi_ok,\"failed\":$_multi_fail}"
         fi
         return $(( _multi_fail > 0 ? 1 : 0 ))
     fi
@@ -778,14 +781,16 @@ for a in d.get('agents',[]):
         apm_die 2 "Cannot resolve runtime file path for '$id'"
     fi
 
-    # Show what we're doing (TUI.md §11)
-    echo ""
-    printf "  %-10s : %s\n" "Installing" "$id"
-    printf "  %-10s : %s\n" "Platform" "$APM_PLATFORM"
-    [ "$deploy_name" != "$id" ] && [ -n "$deploy_name" ] && printf "  %-10s : %s\n" "Alias" "$deploy_name"
-    printf "  %-10s : %s\n" "Source" "$active_body"
-    printf "  %-10s : %s\n" "Target" "$runtime_file"
-    echo ""
+    # Show what we're doing (TUI.md §11) — suppress in JSON mode
+    if [ "$APM_JSON_MODE" != "1" ]; then
+        echo ""
+        printf "  %-10s : %s\n" "Installing" "$id"
+        printf "  %-10s : %s\n" "Platform" "$APM_PLATFORM"
+        [ "$deploy_name" != "$id" ] && [ -n "$deploy_name" ] && printf "  %-10s : %s\n" "Alias" "$deploy_name"
+        printf "  %-10s : %s\n" "Source" "$active_body"
+        printf "  %-10s : %s\n" "Target" "$runtime_file"
+        echo ""
+    fi
 
     # --dry-run: show content and header, don't write
     if [ "$APM_DRY_RUN" = "1" ]; then
@@ -939,18 +944,19 @@ cmd_remove() {
         apm_die 2 "No installed runtime file found for '$id' on platform '$APM_PLATFORM'"
     fi
 
-    # Show target (TUI.md §12)
-    echo ""
-    printf "  %-10s : %s\n" "Remove" "$id"
-    printf "  %-10s : %s\n" "Platform" "$APM_PLATFORM"
-    printf "  %-10s : %s\n" "Target" "$runtime_file"
-    echo ""
-
-    # Warn if runtime differs from library
-    if [ "$sync_state" = "outdated" ]; then
-        apm_warn "runtime differs from canonical library"
-        apm_warn "removal affects runtime only — library is unchanged"
+    # Show target (TUI.md §12) — suppress in JSON mode
+    if [ "$APM_JSON_MODE" != "1" ]; then
         echo ""
+        printf "  %-10s : %s\n" "Remove" "$id"
+        printf "  %-10s : %s\n" "Platform" "$APM_PLATFORM"
+        printf "  %-10s : %s\n" "Target" "$runtime_file"
+        echo ""
+        # Warn if runtime differs from library
+        if [ "$sync_state" = "outdated" ]; then
+            apm_warn "runtime differs from canonical library"
+            apm_warn "removal affects runtime only — library is unchanged"
+            echo ""
+        fi
     fi
 
     # --dry-run: show only
@@ -1607,14 +1613,18 @@ _apm_github_status() {
 
     # If GitHub is not configured, show not-configured status
     if [ -z "$APM_GITHUB_OWNER" ]; then
-        echo ""
-        apm_header "GitHub Status"
-        echo ""
-        printf "  %-14s : %s\n" "Mode"   "${APM_GITHUB_MODE:-not configured}"
-        printf "  %-14s : %s\n" "Owner"  "(not configured)"
-        echo ""
-        apm_warn "GitHub not configured. Run: apm github connect"
-        echo ""
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            echo "{\"github_configured\":false,\"agents\":[]}"
+        else
+            echo ""
+            apm_header "GitHub Status"
+            echo ""
+            printf "  %-14s : %s\n" "Mode"   "${APM_GITHUB_MODE:-not configured}"
+            printf "  %-14s : %s\n" "Owner"  "(not configured)"
+            echo ""
+            apm_warn "GitHub not configured. Run: apm github connect"
+            echo ""
+        fi
         return 0
     fi
 
@@ -1622,14 +1632,16 @@ _apm_github_status() {
 
     local mode="${APM_GITHUB_MODE:-monorepo}"
 
-    echo ""
-    apm_header "GitHub Status"
-    echo ""
-    printf "  %-14s : %s\n" "Mode"   "$mode"
-    printf "  %-14s : %s\n" "Owner"  "$APM_GITHUB_OWNER"
-    [ "$mode" = "monorepo" ] && printf "  %-14s : %s\n" "Repo" "$APM_GITHUB_MONOREPO"
-    printf "  %-14s : %s\n" "Branch" "${APM_GITHUB_BRANCH:-main}"
-    echo ""
+    if [ "$APM_JSON_MODE" != "1" ]; then
+        echo ""
+        apm_header "GitHub Status"
+        echo ""
+        printf "  %-14s : %s\n" "Mode"   "$mode"
+        printf "  %-14s : %s\n" "Owner"  "$APM_GITHUB_OWNER"
+        [ "$mode" = "monorepo" ] && printf "  %-14s : %s\n" "Repo" "$APM_GITHUB_MONOREPO"
+        printf "  %-14s : %s\n" "Branch" "${APM_GITHUB_BRANCH:-main}"
+        echo ""
+    fi
 
     local symbols='{"in-sync":"  ✓","out-of-sync":"  ~","not-pushed":"  ○","not-cloned":"  ?"}'
 
@@ -1680,10 +1692,9 @@ for a in agents:
             agent_ids+=("$line")
         done < <(ls -1 "$APM_AGENTS_DB" | grep -v '^[_.]')
 
-        local all_agent_json='{"agents":['
-        local first=1
+        local _pa_results=()
         for agent_id in "${agent_ids[@]}"; do
-            apm_info "  Checking $agent_id..."
+            [ "$APM_JSON_MODE" != "1" ] && apm_info "  Checking $agent_id..."
             local clone_dir gh_agent_dir gh_state diff_json
             clone_dir=$(mktemp -d)
             local repo_url
@@ -1702,15 +1713,25 @@ for a in agents:
             fi
             rm -rf "$clone_dir"
 
-            local sym
-            case "$gh_state" in
-                in-sync)     sym="  ✓" ;;
-                out-of-sync) sym="  ~" ;;
-                not-pushed)  sym="  ○" ;;
-                *)           sym="  ?" ;;
-            esac
-            printf "%s  %-28s  %s\n" "$sym" "$agent_id" "$gh_state"
+            if [ "$APM_JSON_MODE" = "1" ]; then
+                _pa_results+=("{\"id\":\"$agent_id\",\"github_state\":\"$gh_state\"}")
+            else
+                local sym
+                case "$gh_state" in
+                    in-sync)     sym="  ✓" ;;
+                    out-of-sync) sym="  ~" ;;
+                    not-pushed)  sym="  ○" ;;
+                    *)           sym="  ?" ;;
+                esac
+                printf "%s  %-28s  %s\n" "$sym" "$agent_id" "$gh_state"
+            fi
         done
+
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            local _pa_json
+            _pa_json=$(IFS=,; echo "${_pa_results[*]+"${_pa_results[*]}"}")
+            echo "{\"github_configured\":true,\"mode\":\"per-agent\",\"owner\":\"$APM_GITHUB_OWNER\",\"branch\":\"${APM_GITHUB_BRANCH:-main}\",\"agents\":[$_pa_json]}"
+        fi
     fi
     echo ""
 }
