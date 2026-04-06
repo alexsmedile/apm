@@ -380,13 +380,13 @@ Example (run from the repo root):
 mkdir -p /tmp/fake-claude-agents
 
 CLAUDE_AGENTS=/tmp/fake-claude-agents \
-apm --db tests/fakeagents-db --platform claude-code list
+apm --db "$(pwd)/tests/fakeagents-db" --platform claude-code list
 
 CLAUDE_AGENTS=/tmp/fake-claude-agents \
-apm --db tests/fakeagents-db --platform claude-code install gino
+apm --db "$(pwd)/tests/fakeagents-db" --platform claude-code install gino
 
 CLAUDE_AGENTS=/tmp/fake-claude-agents \
-apm --db tests/fakeagents-db --platform claude-code diff gino
+apm --db "$(pwd)/tests/fakeagents-db" --platform claude-code diff gino
 ```
 
 That is the safest way to learn the tool before pointing it at your real database or real Claude runtime.
@@ -412,8 +412,9 @@ Common issues:
 
 ## 16. Related Docs
 
-- [README.md](README.md) — quick overview
-- [docs/WORKFLOWS.md](docs/WORKFLOWS.md) — Q&A and edge cases
-- [docs/TUI.md](docs/TUI.md) — CLI/TUI feel and UX
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — implementation architecture
-- [docs/AGENT_FRONTMATTER.md](docs/AGENT_FRONTMATTER.md) — frontmatter reference
+- [../README.md](../README.md) — quick overview
+- [WORKFLOWS.md](WORKFLOWS.md) — usability Q&A and edge cases
+- [ARCHITECTURE.md](ARCHITECTURE.md) — module boundaries and data flow
+- [AGENT_FRONTMATTER.md](AGENT_FRONTMATTER.md) — frontmatter schema reference
+- [DATABASE_LIBRARY.md](DATABASE_LIBRARY.md) — canonical database layout guide
+- [../_archive/](../_archive/) — design specs and historical documents

@@ -1,4 +1,4 @@
-# agents_db — Full Reference Guide
+# Agents Library — Full Reference Guide
 
 Complete documentation for the agents_db system: folder structure, frontmatter standard, versioning workflow, and GitHub sync.
 

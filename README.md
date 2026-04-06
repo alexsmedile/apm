@@ -1,21 +1,22 @@
-# apm — AI Prompt Manager
+# apm — Agent Package Manager
 
 A local-first CLI package manager for AI agent prompt files.
 
-`apm` keeps a canonical library of agent definitions and manages their installation into AI platforms (Claude Code, Cursor, etc.). It handles install, diff, update, import, and optional GitHub sync — all with atomic writes, locking, and backups.
-
-## Requirements
-
-- bash 4+
-- python3 + PyYAML (`pip3 install pyyaml`)
-- git (optional, for GitHub sync)
+`apm` keeps a canonical library of agent definitions and manages their installation into agentic coding CLI tools (e.g. Claude Code, Codex, Gemini, etc.). It handles install, diff, update, import, and optional GitHub sync — all with atomic writes, locking, and backups.
 
 ## Install
 
 ```bash
+git clone https://github.com/<user>/apm.git
+cd apm
 bash install.sh          # links apm into ~/.local/bin
 apm setup                # configure library path, platform, optional GitHub
 ```
+
+**Requirements:**
+- bash 4+
+- python3 + PyYAML (`pip3 install pyyaml`)
+- git (optional, for GitHub sync)
 
 ## Quickstart
 
@@ -25,6 +26,51 @@ apm install git-mentor   # install agent to runtime (~/.claude/agents/)
 apm diff git-mentor      # compare library vs runtime
 apm update               # reinstall all outdated agents
 apm import               # import unmanaged runtime agents into library
+```
+
+## Library layout
+
+```
+agents_db/
+  agent-mentor/
+    agent-mentor.md
+    # root file (personal frontmatter + standard deploy config + body with instructions)
+    instructions/                     # default deploy directory
+      agent-mentor@latest.md          # generic active body (optional)
+      agent-mentor.cc@latest.md       # claude-code-specific body (optional)
+    versions/                         # snapshots, backups and history
+```
+
+Body resolution order: `<id>.<platform-alias>@latest.md` → `<id>@latest.md` → `<id>_latest.md` (legacy) → root file body. Most agents use the root file only.
+
+Platform aliases: `claude-code→cc`, `cursor→crs`, `gemini→gmn`, `codex→cdx`, `generic→gen`
+
+### Categories
+
+Add `category: <name>` (or `group: <name>`) to any agent's frontmatter to group it:
+
+```yaml
+category: devtools
+```
+
+Then install the whole group at once:
+
+```bash
+apm install --cat devtools
+```
+
+`apm list` shows the category column when any agents have one set.
+
+## GitHub sync
+
+Two modes:
+- **monorepo** — all agents in one repo, each in a subdirectory
+- **per-agent** — each agent has its own repo
+
+```bash
+apm github connect           # configure mode, owner, repo
+apm github push --all        # push everything
+apm github pull git-mentor   # pull one agent (staged by default)
 ```
 
 ## Commands
@@ -73,78 +119,34 @@ apm import               # import unmanaged runtime agents into library
 | `-` | no-deploy | No deploy config for current platform |
 | `x` | collision | Canonical ID conflict |
 
-## Library layout
-
-```
-agents_db/
-  git-mentor/
-    git-mentor.md                    # root file (frontmatter + deploy config + body)
-    instructions/
-      git-mentor@latest.md           # generic active body (optional)
-      git-mentor.cc@latest.md        # claude-code-specific body (optional)
-    versions/                        # backups and history
-```
-
-Body resolution order: `<id>.<platform-alias>@latest.md` → `<id>@latest.md` → `<id>_latest.md` (legacy) → root file body. Most agents use the root file only.
-
-Platform aliases: `claude-code→cc`, `cursor→crs`, `gemini→gmn`, `codex→cdx`, `generic→gen`
-
-### Categories
-
-Add `category: <name>` (or `group: <name>`) to any agent's frontmatter to group it:
-
-```yaml
-category: devtools
-```
-
-Then install the whole group at once:
-
-```bash
-apm install --cat devtools
-```
-
-`apm list` shows the category column when any agents have one set.
-
-## GitHub sync
-
-Two modes:
-- **monorepo** — all agents in one repo, each in a subdirectory
-- **per-agent** — each agent has its own repo
-
-```bash
-apm github connect           # configure mode, owner, repo
-apm github push --all        # push everything
-apm github pull git-mentor   # pull one agent (staged by default)
-```
-
 ## Docs
 
-- [`TUTORIAL.md`](TUTORIAL.md) — practical getting-started guide for normal users
+- [`docs/TUTORIAL.md`](docs/TUTORIAL.md) — practical getting-started guide for normal users
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — module boundaries and data flow
 - [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) — usability Q&A and edge cases
 - [`docs/AGENT_FRONTMATTER.md`](docs/AGENT_FRONTMATTER.md) — frontmatter schema reference
-- [`docs/TUI.md`](docs/TUI.md) — terminal UX spec
-- [`docs/spec/`](docs/spec/) — per-feature implementation specs
+- [`docs/DATABASE_LIBRARY.md`](docs/DATABASE_LIBRARY.md) — canonical database layout guide
+- [`_archive/`](_archive/) — design specs and historical documents
 
 ## Playground
 
-A safe, resettable test database lives in `tests/fakeagents-db/` with two fake agents (`gino`, `pino`) synced to a private GitHub monorepo at `alexsmedile/fakeagents-db`.
+A safe, resettable test database lives in `tests/fakeagents-db/` with two fake agents (`gino`, `pino`) synced to a private GitHub monorepo at `<user>/fakeagents-db`.
 
 ```bash
 # One-time config setup (recreate after reboot)
-mkdir -p /tmp/apm-fake-config && cat > /tmp/apm-fake-config/config.sh <<'EOF'
-AGENTS_DB="/Users/alex/code/tools/apm/tests/fakeagents-db"
+mkdir -p /tmp/apm-fake-config && cat > /tmp/apm-fake-config/config.sh <<EOF
+AGENTS_DB="$(pwd)/tests/fakeagents-db"
 APM_PLATFORM="claude-code"
 APM_GITHUB_MODE="monorepo"
-APM_GITHUB_OWNER="alexsmedile"
+APM_GITHUB_OWNER="<user>"
 APM_GITHUB_MONOREPO="fakeagents-db"
 APM_GITHUB_BRANCH="main"
 EOF
 
 # Session env
-export AGENTS_DB=/Users/alex/code/tools/apm/tests/fakeagents-db
+export AGENTS_DB="$(pwd)/tests/fakeagents-db"
 export APM_CONFIG_DIR=/tmp/apm-fake-config
-export CLAUDE_AGENTS=/tmp/fake-rt && mkdir -p $CLAUDE_AGENTS
+export CLAUDE_AGENTS=/tmp/fake-rt && mkdir -p \$CLAUDE_AGENTS
 
 # Try it out
 bash apm --platform claude-code list
@@ -163,3 +165,4 @@ make lint       # static checks (bash -n, py_compile)
 make install    # install to ~/.local/bin
 make uninstall  # remove symlink
 ```
+

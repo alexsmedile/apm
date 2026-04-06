@@ -39,6 +39,9 @@ PLATFORM_ALIASES = {
     'cursor':      'crs',
     'gemini':      'gmn',
     'codex':       'cdx',
+    'windsurf':    'wds',
+    'continue':    'cnt',
+    'agents-dir':  'agt',
     'generic':     'gen',
 }
 
