@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test artifacts
+/tmp/
+*.apm.tmp.*
+
+# Config (real user config lives in ~/.config/apm, not here)
+config.sh
+
+# Archive (old plans, drafts, superseded docs)
+_archive/
+
+# Logs
+*.log

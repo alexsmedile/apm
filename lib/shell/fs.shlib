@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# fs.shlib — filesystem safety helpers for apm
+
+# Atomically replace destfile with tmpfile (same filesystem)
+apm_write_atomic() {
+    local tmpfile="$1"
+    local destfile="$2"
+    mv "$tmpfile" "$destfile" || apm_die 2 "Failed to write $destfile"
+}
+
+# Ensure a staging directory exists and is ready
+apm_stage_dir() {
+    local dir="$1"
+    mkdir -p "$dir" || apm_die 2 "Failed to create staging dir: $dir"
+}
+
+# Create a timestamped backup of an agent directory.
+# Copies agent contents (excluding versions/) to versions/apm-backup-YYYY-MM-DD-HHMM/
+apm_backup_agent() {
+    local agent_dir="$1"
+    local timestamp
+    timestamp="$(date +%Y-%m-%d-%H%M)"
+    local backup_dir="${agent_dir}/versions/apm-backup-${timestamp}"
+    mkdir -p "$backup_dir" || apm_die 2 "Failed to create backup dir: $backup_dir"
+    # Copy all contents of agent_dir except the versions/ subdir itself
+    find "$agent_dir" -maxdepth 1 -mindepth 1 ! -name "versions" \
+        -exec cp -r {} "$backup_dir/" \; || return 1
+    echo "$backup_dir"
+}
+
+# Ensure directory exists, die on failure
+apm_ensure_dir() {
+    local dir="$1"
+    mkdir -p "$dir" || apm_die 2 "Failed to create directory: $dir"
+}

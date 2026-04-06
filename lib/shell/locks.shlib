@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# locks.shlib — lock acquisition and release helpers for apm
+# Lock categories: config, runtime-<platform>, library, github
+# Lock files: ~/.config/apm/locks/<name>.lock
+
+# APM_CONFIG_DIR is set by config.shlib; fall back if sourced independently.
+_APM_LOCKS_DIR="${APM_CONFIG_DIR:-${HOME}/.config/apm}/locks"
+
+# Acquire a named lock. Dies with exit 4 if already held by live process.
+apm_acquire_lock() {
+    local name="$1"
+    local lockfile="${_APM_LOCKS_DIR}/${name}.lock"
+
+    mkdir -p "$_APM_LOCKS_DIR" || apm_die 2 "Cannot create lock dir: $_APM_LOCKS_DIR"
+
+    # Check for existing lock
+    if [ -f "$lockfile" ]; then
+        local pid
+        pid=$(grep '^pid=' "$lockfile" 2>/dev/null | cut -d= -f2)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            apm_die 4 "Another apm process holds ${name}.lock (pid ${pid})"
+        else
+            # Stale lock — remove it
+            rm -f "$lockfile"
+        fi
+    fi
+
+    # Write lock file
+    printf 'pid=%s\ntimestamp=%s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$lockfile" \
+        || apm_die 2 "Cannot write lock file: $lockfile"
+}
+
+# Release a named lock.
+apm_release_lock() {
+    local name="$1"
+    local lockfile="${_APM_LOCKS_DIR}/${name}.lock"
+    rm -f "$lockfile"
+}
+
+# Check if a lock is held by a live process.
+# Returns 0 if free (or stale), 1 if locked by live process.
+apm_check_lock() {
+    local name="$1"
+    local lockfile="${_APM_LOCKS_DIR}/${name}.lock"
+
+    [ -f "$lockfile" ] || return 0
+
+    local pid
+    pid=$(grep '^pid=' "$lockfile" 2>/dev/null | cut -d= -f2)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        return 1
+    fi
+
+    # Stale — clean up
+    rm -f "$lockfile"
+    return 0
+}

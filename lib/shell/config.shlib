@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# config.shlib — config loading, env overrides, and setup wizard for apm
+
+# APM_CONFIG_DIR may be overridden by environment (useful for tests and
+# constrained environments where the real HOME is not writable).
+APM_CONFIG_DIR="${APM_CONFIG_DIR:-${HOME}/.config/apm}"
+export APM_CONFIG_DIR
+
+_APM_CONFIG_FILE="${APM_CONFIG_DIR}/config.sh"
+
+# Built-in defaults
+_APM_DEFAULT_PLATFORM="claude-code"
+_APM_DEFAULT_CLAUDE_AGENTS="${HOME}/.claude/agents"
+_APM_DEFAULT_CURSOR_RULES="${HOME}/.cursor/rules"
+_APM_DEFAULT_GENERIC_EXPORT="${HOME}/Desktop/agents-export"
+_APM_DEFAULT_GITHUB_BRANCH="main"
+
+# Load config file, apply env overrides, set APM_* variables.
+# Call this early in every command after parsing CLI flags.
+apm_load_config() {
+    # Save env vars before sourcing config file (config file would overwrite them)
+    _APM_ENV_AGENTS_DB="${AGENTS_DB:-}"
+    _APM_ENV_PLATFORM="${PLATFORM:-}"
+    _APM_ENV_CLAUDE_AGENTS="${CLAUDE_AGENTS:-}"
+    _APM_ENV_CURSOR_RULES="${CURSOR_RULES:-}"
+    _APM_ENV_GENERIC_EXPORT="${GENERIC_EXPORT:-}"
+    _APM_ENV_GITHUB_MODE="${GITHUB_MODE:-}"
+    _APM_ENV_GITHUB_OWNER="${GITHUB_OWNER:-}"
+    _APM_ENV_GITHUB_MONOREPO="${GITHUB_MONOREPO:-}"
+    _APM_ENV_GITHUB_BRANCH="${GITHUB_BRANCH:-}"
+
+    # Start with built-in defaults
+    APM_PLATFORM="${_APM_DEFAULT_PLATFORM}"
+    APM_CLAUDE_AGENTS="${_APM_DEFAULT_CLAUDE_AGENTS}"
+    APM_CURSOR_RULES="${_APM_DEFAULT_CURSOR_RULES}"
+    APM_GENERIC_EXPORT="${_APM_DEFAULT_GENERIC_EXPORT}"
+    APM_GITHUB_MODE=""
+    APM_GITHUB_OWNER=""
+    APM_GITHUB_MONOREPO=""
+    APM_GITHUB_BRANCH="${_APM_DEFAULT_GITHUB_BRANCH}"
+    APM_AGENTS_DB=""
+
+    # Load config file if present
+    if [ -f "$_APM_CONFIG_FILE" ]; then
+        # shellcheck source=/dev/null
+        source "$_APM_CONFIG_FILE"
+        # Config file uses plain names; map to APM_* vars
+        [ -n "${AGENTS_DB:-}" ] && APM_AGENTS_DB="${AGENTS_DB}"
+        [ -n "${PLATFORM:-}" ] && APM_PLATFORM="${PLATFORM}"
+        [ -n "${CLAUDE_AGENTS:-}" ] && APM_CLAUDE_AGENTS="${CLAUDE_AGENTS}"
+        [ -n "${CURSOR_RULES:-}" ] && APM_CURSOR_RULES="${CURSOR_RULES}"
+        [ -n "${GENERIC_EXPORT:-}" ] && APM_GENERIC_EXPORT="${GENERIC_EXPORT}"
+        [ -n "${GITHUB_MODE:-}" ] && APM_GITHUB_MODE="${GITHUB_MODE}"
+        [ -n "${GITHUB_OWNER:-}" ] && APM_GITHUB_OWNER="${GITHUB_OWNER}"
+        [ -n "${GITHUB_MONOREPO:-}" ] && APM_GITHUB_MONOREPO="${GITHUB_MONOREPO}"
+        [ -n "${GITHUB_BRANCH:-}" ] && APM_GITHUB_BRANCH="${GITHUB_BRANCH}"
+    fi
+
+    # Apply env var overrides (higher priority than config file)
+    # These use _APM_ENV_* saved before sourcing the config file
+    [ -n "${_APM_ENV_AGENTS_DB:-}" ]       && APM_AGENTS_DB="${_APM_ENV_AGENTS_DB}"
+    [ -n "${_APM_ENV_PLATFORM:-}" ]        && APM_PLATFORM="${_APM_ENV_PLATFORM}"
+    [ -n "${_APM_ENV_CLAUDE_AGENTS:-}" ]   && APM_CLAUDE_AGENTS="${_APM_ENV_CLAUDE_AGENTS}"
+    [ -n "${_APM_ENV_CURSOR_RULES:-}" ]    && APM_CURSOR_RULES="${_APM_ENV_CURSOR_RULES}"
+    [ -n "${_APM_ENV_GENERIC_EXPORT:-}" ]  && APM_GENERIC_EXPORT="${_APM_ENV_GENERIC_EXPORT}"
+    [ -n "${_APM_ENV_GITHUB_MODE:-}" ]     && APM_GITHUB_MODE="${_APM_ENV_GITHUB_MODE}"
+    [ -n "${_APM_ENV_GITHUB_OWNER:-}" ]    && APM_GITHUB_OWNER="${_APM_ENV_GITHUB_OWNER}"
+    [ -n "${_APM_ENV_GITHUB_MONOREPO:-}" ] && APM_GITHUB_MONOREPO="${_APM_ENV_GITHUB_MONOREPO}"
+    [ -n "${_APM_ENV_GITHUB_BRANCH:-}" ]   && APM_GITHUB_BRANCH="${_APM_ENV_GITHUB_BRANCH}"
+
+    # Resolve runtime directory for current platform
+    case "$APM_PLATFORM" in
+        claude-code) APM_RUNTIME_DIR="${APM_CLAUDE_AGENTS}" ;;
+        cursor)      APM_RUNTIME_DIR="${APM_CURSOR_RULES}" ;;
+        generic)     APM_RUNTIME_DIR="${APM_GENERIC_EXPORT}" ;;
+        *)           APM_RUNTIME_DIR="" ;;
+    esac
+
+    export APM_AGENTS_DB APM_PLATFORM APM_CLAUDE_AGENTS APM_CURSOR_RULES \
+           APM_GENERIC_EXPORT APM_GITHUB_MODE APM_GITHUB_OWNER APM_GITHUB_MONOREPO \
+           APM_GITHUB_BRANCH APM_RUNTIME_DIR
+}
+
+# Apply CLI flag overrides (call after apm_load_config)
+# Expects _CLI_DB and _CLI_PLATFORM to be set by the entrypoint parser
+apm_apply_cli_overrides() {
+    [ -n "${_CLI_DB:-}" ] && APM_AGENTS_DB="${_CLI_DB}"
+    [ -n "${_CLI_PLATFORM:-}" ] && APM_PLATFORM="${_CLI_PLATFORM}"
+    # Re-resolve runtime dir after platform override
+    case "$APM_PLATFORM" in
+        claude-code) APM_RUNTIME_DIR="${APM_CLAUDE_AGENTS}" ;;
+        cursor)      APM_RUNTIME_DIR="${APM_CURSOR_RULES}" ;;
+        generic)     APM_RUNTIME_DIR="${APM_GENERIC_EXPORT}" ;;
+        *)           APM_RUNTIME_DIR="" ;;
+    esac
+    export APM_AGENTS_DB APM_PLATFORM APM_RUNTIME_DIR
+}
+
+# Interactive setup wizard — creates ~/.config/apm/config.sh
+apm_setup_wizard() {
+    echo ""
+    if [ -f "$_APM_CONFIG_FILE" ]; then
+        echo "Config found at $_APM_CONFIG_FILE"
+        echo "Re-running setup will overwrite existing values."
+        printf "Continue? [y/N] "
+        read -r _answer
+        case "$_answer" in
+            [yY]*) ;;
+            *) echo "Setup cancelled."; return 0 ;;
+        esac
+        echo ""
+    fi
+
+    # Gather values
+    printf "Local database path [${HOME}/agents_db]: "
+    read -r _db
+    _db="${_db:-${HOME}/agents_db}"
+    _db="${_db/#\~/$HOME}"
+
+    echo "Default platform:"
+    echo "  1) claude-code (default)"
+    echo "  2) cursor"
+    echo "  3) codex"
+    echo "  4) gemini"
+    echo "  5) generic"
+    printf "Choice [1-5] or name (claude-code): "
+    read -r _platform_input
+    case "${_platform_input:-1}" in
+        1|claude-code) _platform="claude-code" ;;
+        2|cursor)      _platform="cursor" ;;
+        3|codex)       _platform="codex" ;;
+        4|gemini)      _platform="gemini" ;;
+        5|generic)     _platform="generic" ;;
+        *)             _platform="${_platform_input:-claude-code}" ;;
+    esac
+
+    printf "Enable GitHub sync? [y/N] "
+    read -r _github_yn
+    _github_mode=""
+    _github_owner=""
+    _github_monorepo=""
+    _github_branch="main"
+
+    case "$_github_yn" in
+        [yY]*)
+            echo "GitHub mode:"
+            echo "  1) monorepo  — all agents in one repo, each in a subdirectory (default)"
+            echo "  2) per-agent — each agent has its own repo"
+            printf "Choice [1-2] or name (monorepo): "
+            read -r _github_mode_input
+            case "${_github_mode_input:-1}" in
+                1|monorepo)  _github_mode="monorepo" ;;
+                2|per-agent) _github_mode="per-agent" ;;
+                *)           _github_mode="${_github_mode_input:-monorepo}" ;;
+            esac
+
+            printf "GitHub owner or org (your GitHub username or org name): "
+            read -r _github_owner
+
+            if [ "$_github_mode" = "monorepo" ]; then
+                printf "GitHub monorepo name [agents]: "
+                read -r _github_monorepo
+                _github_monorepo="${_github_monorepo:-agents}"
+            fi
+
+            printf "Default branch [main]: "
+            read -r _github_branch
+            _github_branch="${_github_branch:-main}"
+            ;;
+    esac
+
+    # Write config file atomically (temp + rename to avoid partial writes)
+    mkdir -p "$(dirname "$_APM_CONFIG_FILE")" || {
+        apm_err "Cannot create config directory"
+        return 2
+    }
+
+    local _tmp_cfg="${_APM_CONFIG_FILE}.apm.tmp.$$"
+    cat > "$_tmp_cfg" <<EOF
+# apm configuration
+# Generated by: apm setup
+# Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+AGENTS_DB="${_db}"
+PLATFORM="${_platform}"
+CLAUDE_AGENTS="\${HOME}/.claude/agents"
+CURSOR_RULES="\${HOME}/.cursor/rules"
+GENERIC_EXPORT="\${HOME}/Desktop/agents-export"
+GITHUB_MODE="${_github_mode}"
+GITHUB_OWNER="${_github_owner}"
+GITHUB_MONOREPO="${_github_monorepo}"
+GITHUB_BRANCH="${_github_branch}"
+EOF
+
+    mv "$_tmp_cfg" "$_APM_CONFIG_FILE" || {
+        rm -f "$_tmp_cfg"
+        apm_err "Failed to write config file"
+        return 2
+    }
+
+    echo ""
+    echo "Config saved to $_APM_CONFIG_FILE"
+}
