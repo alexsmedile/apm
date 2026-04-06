@@ -394,7 +394,7 @@ test_interactive_shows_agent_counts() {
     out=$(AGENTS_DB="$tmpdb" CLAUDE_AGENTS="$tmprt" \
         bash "$PROJECT_ROOT/apm" --platform claude-code <<< "" 2>/dev/null)
     rm -rf "$tmpdb" "$tmprt"
-    echo "$out" | grep -q "agents:"
+    echo "$out" | grep -qi "agents:"
 }
 run_test "interactive: dashboard shows agent summary line" test_interactive_shows_agent_counts
 

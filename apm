@@ -49,12 +49,13 @@ _apm_py() {
 _CLI_DB=""
 _CLI_PLATFORM=""
 _CLI_INSTALL_MODE=""
-APM_JSON_MODE=0
-APM_DRY_RUN=0
-APM_FORCE=0
-APM_GLOBAL_FORCE=0
+: "${APM_JSON_MODE:=0}"
+: "${APM_DRY_RUN:=0}"
+: "${APM_FORCE:=0}"
+: "${APM_GLOBAL_FORCE:=0}"
 
 _apm_parse_global_flags() {
+    local _pos_args=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --db)
@@ -64,17 +65,18 @@ _apm_parse_global_flags() {
                 [ $# -lt 2 ] && apm_die 2 "--platform requires a value"
                 _CLI_PLATFORM="$2"; shift 2 ;;
             --json)          APM_JSON_MODE=1; export APM_JSON_MODE; shift ;;
-            --dry-run)       APM_DRY_RUN=1; shift ;;
-            --force)         APM_FORCE=1; shift ;;
+            --dry-run)       APM_DRY_RUN=1; export APM_DRY_RUN; shift ;;
+            --force)         APM_FORCE=1; export APM_FORCE; shift ;;
             --global|-g)     APM_GLOBAL_FORCE=1; export APM_GLOBAL_FORCE; shift ;;
             --install-mode)
                 [ $# -lt 2 ] && apm_die 2 "--install-mode requires a value (copy|symlink)"
                 _CLI_INSTALL_MODE="$2"; shift 2 ;;
-            *)          break ;;
+            *)
+                _pos_args+=("$1")
+                shift ;;
         esac
     done
-    # Return remaining args by storing in global array
-    _REMAINING_ARGS=("$@")
+    _REMAINING_ARGS=("${_pos_args[@]+"${_pos_args[@]}"}")
 }
 
 # ---------------------------------------------------------------------------
@@ -224,8 +226,10 @@ cmd_list() {
         case "$1" in
             --global|-g) force_global=1; shift ;;
             --project)   force_project=1; shift ;;
-            -a|--alias|--platform) [ $# -lt 2 ] && apm_die 2 "$1 requires a value"; filter_platform="$2"; shift 2 ;;
-            -*)          apm_die 2 "Unknown flag for list: $1" ;;
+            -a|--alias|--platform) 
+                [ $# -lt 2 ] && apm_die 2 "$1 requires a value"
+                filter_platform="$2"; shift 2 ;;
+            -*)          shift ;; # skip other flags (might be global flags passed after cmd)
             *)           [ -z "$query" ] && query="$1"; shift ;;
         esac
     done
@@ -285,17 +289,9 @@ query = \"$query\".lower()
 fplat = \"$filter_platform\".lower()
 
 def match(a, q, fp):
-    if fp:
-        # Check if deploy config exists and is enabled for this platform
-        # The Python helper returns manifest for THE current platform,
-        # but we can check the root_meta or deploy if we had all platforms.
-        # WAIT: the status-agents call only returns info for ONE platform at a time.
-        # If we want to filter by platform across all platforms, we need a different helper.
-        # HOWEVER, the reference npx skills ls -a <platform> implies listing agents
-        # THAT ARE COMPATIBLE with that platform.
-        pass
-
-    if not q: return True
+    if not q and not fp: return True
+    if not q: q = ''
+    if not fp: fp = ''
     # check ID
     if q in str(a.get('id', '') or '').lower(): return True
     # check root meta (name, description)
@@ -309,15 +305,22 @@ def match(a, q, fp):
     return False
 
 if query:
-    agents = [a for a in agents if match(a, query, fplat)]
+    agents = [a for a in agents if match(a, query, '')]
 
-# If platform filter is provided, we actually need to re-scan with that platform context
-# if we want accurate 'sync' state for THAT platform.
-# For now, we'll just filter the current list if it has a deploy block for it.
 if fplat:
-    # This is tricky because build-manifest (used by status-agents) only targets ONE platform.
-    # We'll rely on root_meta.deploy.<fplat> existence.
-    agents = [a for a in agents if fplat in (a.get('root_meta',{}).get('deploy',{}) or {})]
+    def _has_deploy(a, platform):
+        deploy = (a.get('root_meta', {}) or {}).get('deploy', {}) or {}
+        plat_block = deploy.get(platform, {}) or {}
+        if plat_block and plat_block.get('enabled', True) is not False:
+            return True
+        # agents-dir fallback: any agent with at least one enabled deploy block
+        if platform == 'agents-dir':
+            return any(
+                isinstance(v, dict) and v.get('enabled', True) is not False
+                for v in deploy.values()
+            )
+        return False
+    agents = [a for a in agents if _has_deploy(a, fplat)]
 
 if not agents:
     if query:
@@ -2495,7 +2498,7 @@ main() {
             cmd_validate "${_REMAINING_ARGS[1]:-}"
             ;;
         list|ls)
-            cmd_list "${_REMAINING_ARGS[1]:-}"
+            cmd_list "${_REMAINING_ARGS[@]:1}"
             ;;
         find)
             cmd_find "${_REMAINING_ARGS[1]:-}"
