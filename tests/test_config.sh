@@ -97,11 +97,12 @@ run_test "config: default platform is claude-code when not set" test_platform_de
 test_setup_wizard_creates_config() {
     local cfgdir
     cfgdir=$(mktemp -d)
-    # Feed: db path, platform, no github
+    # Feed: db path, platform, install mode, no github
     APM_CONFIG_DIR="$cfgdir" \
         bash "$PROJECT_ROOT/apm" setup <<'INPUT' > /dev/null 2>&1
 /tmp/test-agents-db
 claude-code
+1
 n
 INPUT
     [ -f "${cfgdir}/config.sh" ]
@@ -118,6 +119,7 @@ test_setup_wizard_writes_agents_db() {
         bash "$PROJECT_ROOT/apm" setup <<'INPUT' > /dev/null 2>&1
 /tmp/test-agents-db
 claude-code
+1
 n
 INPUT
     local content
@@ -134,6 +136,7 @@ test_setup_wizard_writes_platform() {
         bash "$PROJECT_ROOT/apm" setup <<'INPUT' > /dev/null 2>&1
 /tmp/test-db
 cursor
+1
 n
 INPUT
     local content
@@ -152,6 +155,7 @@ test_setup_wizard_atomic_write() {
         bash "$PROJECT_ROOT/apm" setup <<'INPUT' > /dev/null 2>&1
 /tmp/test-db
 claude-code
+1
 n
 INPUT
     # Source the config: if it's valid shell, this won't crash
@@ -169,6 +173,7 @@ test_setup_wizard_with_github() {
         bash "$PROJECT_ROOT/apm" setup <<'INPUT' > /dev/null 2>&1
 /tmp/test-db
 claude-code
+1
 y
 monorepo
 myorg
