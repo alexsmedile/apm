@@ -31,20 +31,28 @@ echo "=== Roadmap Phase 2 Feature Tests ==="
 test_init_claude_code() {
     local workdir
     workdir=$(mktemp -d)
+    local old_pwd=$(pwd)
     cd "$workdir" || return 1
     
     # Run init with force to skip confirmation
     APM_FORCE=1 bash "$PROJECT_ROOT/apm" --platform claude-code init >/dev/null
     
-    [ -d ".claude/agents" ] || { echo "FAIL: .claude/agents not created"; rm -rf "$workdir"; return 1; }
+    local ok=0
+    # echo "DEBUG: PWD: $(pwd)"
+    # ls -la .claude/agents 2>/dev/null
+    if [ -d ".claude/agents" ]; then
+        # Verify config now reports project scope
+        local out
+        out=$(bash "$PROJECT_ROOT/apm" --platform claude-code --json config)
+        # echo "DEBUG: CONFIG OUT: $out"
+        if assert_json_field "$out" "scope" "project" && assert_json_field "$out" "runtime_dir" "./.claude/agents"; then
+            ok=1
+        fi
+    fi
     
-    # Verify config now reports project scope
-    local out
-    out=$(bash "$PROJECT_ROOT/apm" --platform claude-code --json config)
-    assert_json_field "$out" "scope" "project" || { rm -rf "$workdir"; return 1; }
-    assert_json_field "$out" "runtime_dir" "./.claude/agents" || { rm -rf "$workdir"; return 1; }
-    
+    cd "$old_pwd" || return 1
     rm -rf "$workdir"
+    [ "$ok" -eq 1 ] || return 1
 }
 run_test "init: creates .claude/agents and detects project scope" test_init_claude_code
 
@@ -83,17 +91,19 @@ deploy:
 EOF
 
     local out
+    local ok=1
     # Filter for cursor
     out=$(bash "$PROJECT_ROOT/apm" --db "$db" ls -a cursor)
-    echo "$out" | grep -q "cursor-only" || { echo "FAIL: cursor-only missing from filter"; rm -rf "$db"; return 1; }
-    echo "$out" | grep -q "claude-agent" && { echo "FAIL: claude-agent should be filtered out"; rm -rf "$db"; return 1; }
+    echo "$out" | grep -q "cursor-only" || { echo "FAIL: cursor-only missing from filter"; ok=0; }
+    echo "$out" | grep -q "claude-agent" && { echo "FAIL: claude-agent should be filtered out"; ok=0; }
 
     # Filter for claude-code
     out=$(bash "$PROJECT_ROOT/apm" --db "$db" ls -a claude-code)
-    echo "$out" | grep -q "claude-agent" || { echo "FAIL: claude-agent missing from filter"; rm -rf "$db"; return 1; }
-    echo "$out" | grep -q "cursor-only" && { echo "FAIL: cursor-only should be filtered out"; rm -rf "$db"; return 1; }
+    echo "$out" | grep -q "claude-agent" || { echo "FAIL: claude-agent missing from filter"; ok=0; }
+    echo "$out" | grep -q "cursor-only" && { echo "FAIL: cursor-only should be filtered out"; ok=0; }
 
     rm -rf "$db"
+    [ "$ok" -eq 1 ]
 }
 run_test "ls -a: filters agents by platform compatibility" test_ls_platform_filter
 
@@ -120,12 +130,14 @@ EOF
     local out
     out=$(bash "$PROJECT_ROOT/apm" --db "$db" --platform claude-code install --dry-run test-agent)
     
-    echo "$out" | grep -q "--- Generated Content (Dry Run) ---" || { echo "FAIL: Dry run header missing"; rm -rf "$db"; return 1; }
-    echo "$out" | grep -q "name: test-agent" || { echo "FAIL: Generated frontmatter missing"; rm -rf "$db"; return 1; }
-    echo "$out" | grep -q "tools:" || { echo "FAIL: Generated tools missing"; rm -rf "$db"; return 1; }
-    echo "$out" | grep -q "# Test Body" || { echo "FAIL: Generated body missing"; rm -rf "$db"; return 1; }
+    local ok=1
+    echo "$out" | grep -q "\-\-\- Generated Content (Dry Run) \-\-\-" || { echo "FAIL: Dry run header missing"; ok=0; }
+    echo "$out" | grep -q "name: test-agent" || { echo "FAIL: Generated frontmatter missing"; ok=0; }
+    echo "$out" | grep -q "tools:" || { echo "FAIL: Generated tools missing"; ok=0; }
+    echo "$out" | grep -q "# Test Body" || { echo "FAIL: Generated body missing"; ok=0; }
     
     rm -rf "$db"
+    [ "$ok" -eq 1 ]
 }
 run_test "install --dry-run: shows generated content" test_install_dry_run_output
 
