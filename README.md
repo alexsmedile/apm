@@ -192,7 +192,8 @@ apm github pull git-mentor   # pull one agent (staged by default)
 - [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) — usability Q&A and edge cases
 - [`docs/AGENT_ENTRY_SCHEMA.md`](docs/AGENT_ENTRY_SCHEMA.md) — library metadata and deploy schema reference
 - [`docs/DATABASE_LIBRARY.md`](docs/DATABASE_LIBRARY.md) — canonical database layout guide
-- [`_archive/`](_archive/) — design specs and historical documents
+- [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — version history
+- [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — how to contribute
 
 ## Playground
 
