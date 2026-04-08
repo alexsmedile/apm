@@ -29,3 +29,6 @@ _archive/
 
 # Logs
 *.log
+
+# Personal notes
+TODO.md
