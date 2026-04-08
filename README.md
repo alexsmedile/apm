@@ -9,9 +9,8 @@ It handles: `install`, `diff`, `update`, `import`, and optional **GitHub sync** 
 
 <div align="center">
 
-| Works with | | | | |
-|:---:|:---:|:---:|:---:|:---:|
-| <img src="https://img.shields.io/badge/Claude_Code-cc6b39?style=flat-square&logo=anthropic&logoColor=white" alt="Claude Code" /> | <img src="https://img.shields.io/badge/Codex-412991?style=flat-square&logo=openai&logoColor=white" alt="Codex" /> | <img src="https://img.shields.io/badge/Cursor-000000?style=flat-square&logo=cursor&logoColor=white" alt="Cursor" /> | <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=google&logoColor=white" alt="Gemini" /> | <img src="https://img.shields.io/badge/Generic-6c757d?style=flat-square&logo=terminal&logoColor=white" alt="Generic" /> |
+| **Works with** | <img src="https://img.shields.io/badge/Claude_Code-cc6b39?style=flat-square&logo=anthropic&logoColor=white" alt="Claude Code" /> | <img src="https://img.shields.io/badge/Codex-412991?style=flat-square&logo=openai&logoColor=white" alt="Codex" /> | <img src="https://img.shields.io/badge/Cursor-000000?style=flat-square&logo=cursor&logoColor=white" alt="Cursor" /> | <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=google&logoColor=white" alt="Gemini" /> | <img src="https://img.shields.io/badge/Generic-6c757d?style=flat-square&logo=terminal&logoColor=white" alt="Generic" /> |
+|---|:---:|:---:|:---:|:---:|:---:|
 
 </div>
 
