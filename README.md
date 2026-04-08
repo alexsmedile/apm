@@ -30,7 +30,7 @@ Define an agent once in your library. Install it to Claude Code, Codex, Cursor, 
 Always know what's installed, what's outdated, and what's drifted. <code>apm list</code> gives you a full picture at a glance.
 </td>
 <td align="center" width="33%">
-<h3>📥 Import Unmanaged Agents</h3>
+<h3>📥 Import Agents</h3>
 Already have agents scattered across tool directories? <code>apm import</code> brings them into your library with a single command.
 </td>
 </tr>
