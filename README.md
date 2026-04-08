@@ -1,11 +1,13 @@
 # apm — Agent Package Manager
 _Write an agent once. Install it everywhere._
 
-A local-first CLI package manager for AI agent prompt files.
+**A CLI package manager for AI agent prompt files.**
 
-`apm` keeps a canonical library of agent definitions and manages their installation into agentic coding CLI tools (e.g. Claude Code, Codex, Gemini, etc.). It handles install, diff, update, import, and optional GitHub sync — all with atomic writes, locking, and backups.
+`apm` syncs your library of agent definitions and manages their installation into agentic coding tools (e.g. Claude Code, Codex, Gemini, etc.).
 
-> **agents vs subagents:** In most AI tools, "agent" means the tool's primary AI persona. The `agents/` directories (`~/.claude/agents/`, `~/.cursor/agents/`, etc.) hold **subagents** — specialized, named agents invoked for specific tasks. `apm` manages subagents only.
+It handles: `install`, `diff`, `update`, `import`, and optional **GitHub sync** — all with atomic writes, locking, and backups.
+
+> This tool is under active development. It may contain bugs. Always back up your data.
 
 ## Install
 
@@ -33,11 +35,20 @@ apm import               # import unmanaged runtime agents into library
 
 ## Library layout
 
+Here's how to structure your library:
+
+```
+agents_library/
+  agent-mentor/
+    agent-mentor.md # root file (frontmatter with deploy config, body = instructions)
+```
+
+If you need more control add:
+
 ```
 agents_library/
   agent-mentor/
     agent-mentor.md
-    # root file (personal frontmatter + standard deploy config + body with instructions)
     instructions/                     # default deploy directory
       agent-mentor@latest.md          # generic active body (optional)
       agent-mentor.cc@latest.md       # claude-code-specific body (optional)
@@ -47,6 +58,8 @@ agents_library/
 Body resolution order: `<id>.<platform-alias>@latest.md` → `<id>@latest.md` → `<id>_latest.md` (legacy) → root file body. Most agents use the root file only.
 
 Platform aliases: `claude-code→cc`, `cursor→crs`, `gemini→gmn`, `codex→cdx`, `generic→gen`
+
+> **About the "agents".** In most AI tools, "agent" means the tool's primary AI persona, but the `agents/` directories (`~/.claude/agents/`, `~/.cursor/agents/`, etc.) actually hold **subagents** — specialized, named agents invoked for specific tasks. `apm` manages subagents only.
 
 ### Categories
 
