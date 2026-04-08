@@ -17,6 +17,49 @@ It handles: `install`, `diff`, `update`, `import`, and optional **GitHub sync** 
 
 > This tool is under active development. It may contain bugs. Always back up your data.
 
+## Features
+
+<table>
+<tr>
+<td align="center" width="33%">
+<h3>📚 One Library, All Tools</h3>
+Define an agent once in your library. Install it to Claude Code, Codex, Cursor, or Gemini — with the right format for each.
+</td>
+<td align="center" width="33%">
+<h3>🔄 Sync State Tracking</h3>
+Always know what's installed, what's outdated, and what's drifted. <code>apm list</code> gives you a full picture at a glance.
+</td>
+<td align="center" width="33%">
+<h3>📥 Import Unmanaged Agents</h3>
+Already have agents scattered across tool directories? <code>apm import</code> brings them into your library with a single command.
+</td>
+</tr>
+<tr>
+<td align="center">
+<h3>☁️ GitHub Sync</h3>
+Back up and share your library via GitHub. Monorepo or per-agent mode. Push, pull, and diff from the CLI.
+</td>
+<td align="center">
+<h3>🛡️ Safe by Default</h3>
+Atomic writes, file locking, and automatic backups before every destructive operation. No silent overwrites.
+</td>
+<td align="center">
+<h3>🗂️ Categories</h3>
+Tag agents with a category and install entire groups at once. Keep your library organized as it grows.
+</td>
+</tr>
+</table>
+
+## Problems apm solves
+
+| Without apm | With apm |
+|---|---|
+| ❌ You copy-paste the same agent prompt into Claude Code, Cursor, and Codex separately — and they drift apart over time. | ✅ One source of truth in your library. Install to any tool with one command. |
+| ❌ You edit an agent directly in `~/.claude/agents/` and forget which version is canonical. | ✅ Library always wins. Runtime is treated as a deploy target, never the source. |
+| ❌ You have no idea which installed agents are outdated or missing after switching machines. | ✅ `apm list` shows sync state for every agent — in-sync, outdated, ready, or unmanaged. |
+| ❌ You accumulate random `.md` files in your agents directories with no record of where they came from. | ✅ Every installed file is stamped with `apm.id`, platform, and install timestamp. |
+| ❌ Updating an agent means manually finding and overwriting files across multiple tools. | ✅ `apm update` reinstalls every outdated agent in one shot, with backups. |
+
 ## Install
 
 ```bash
