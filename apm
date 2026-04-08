@@ -2,6 +2,8 @@
 # apm — local-first package manager for AI agent prompt files
 # See PLAN.md and SPEC_*.md for full specification
 
+APM_VERSION="0.1.0"
+
 set -uo pipefail
 
 # Resolve script location for lib paths (follow symlinks so lib/ is found correctly)
@@ -2500,7 +2502,7 @@ main() {
 
     # Check dependencies (skip for setup and help)
     local cmd="${_REMAINING_ARGS[0]:-}"
-    if [ "$cmd" != "setup" ] && [ "$cmd" != "--help" ] && [ "$cmd" != "-h" ]; then
+    if [ "$cmd" != "setup" ] && [ "$cmd" != "--help" ] && [ "$cmd" != "-h" ] && [ "$cmd" != "--version" ] && [ "$cmd" != "-V" ] && [ "$cmd" != "version" ]; then
         _apm_check_deps
     fi
 
@@ -2548,9 +2550,12 @@ main() {
         github)
             cmd_github "${_REMAINING_ARGS[@]:1}"
             ;;
+        version|--version|-V)
+            echo "apm $APM_VERSION"
+            ;;
         --help|-h|help)
+            echo "apm $APM_VERSION — local-first package manager for AI agent prompt files"
             cat <<'HELP'
-apm — local-first package manager for AI agent prompt files
 
 Usage:
   apm [flags] <command> [args]
@@ -2581,6 +2586,7 @@ Commands:
   import                       Pick from unmanaged runtime agents (interactive)
   import [id]                  Import specific agent, or --all for everything
   github <sub>                 GitHub sync (connect, status, diff, push, pull)
+  version                      Show apm version
 
 Run with no command for interactive mode.
 HELP
