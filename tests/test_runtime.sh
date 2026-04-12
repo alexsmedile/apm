@@ -289,6 +289,206 @@ print(sum(1 for a in d.get('agents',[]) if a.get('state',{}).get('sync')=='in-sy
 }
 run_test "status: shows in-sync after install" test_status_shows_in_sync
 
+test_status_symlink_install_mode_not_linked_outdated() {
+    local tmprt tmpagents out state
+    tmprt=$(mktemp -d)
+    tmpagents=$(mktemp -d)
+    AGENTS_DB="$(realpath "$FIXTURES/library-basic")" \
+        CLAUDE_AGENTS="$tmprt" \
+        AGENTS_DIR="$tmpagents" \
+        INSTALL_MODE="symlink" \
+        bash "$PROJECT_ROOT/apm" --platform claude-code install git-mentor > /dev/null 2>&1
+    out=$(AGENTS_DB="$(realpath "$FIXTURES/library-basic")" \
+        CLAUDE_AGENTS="$tmprt" \
+        AGENTS_DIR="$tmpagents" \
+        INSTALL_MODE="symlink" \
+        bash "$PROJECT_ROOT/apm" --platform claude-code --json status 2>/dev/null)
+    state=$(echo "$out" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for a in d.get('agents', []):
+    if a.get('id') == 'git-mentor':
+        print(a.get('state', {}).get('sync', ''))
+        break
+" 2>/dev/null)
+    rm -rf "$tmprt" "$tmpagents"
+    [ "$state" = "in-sync" ]
+}
+run_test "status: symlink install mode remains in-sync" test_status_symlink_install_mode_not_linked_outdated
+
+test_status_direct_link_reports_linked_then_linked_outdated() {
+    local tmprt tmpdb out state linked_path
+    tmprt=$(mktemp -d)
+    tmpdb=$(mktemp -d)
+    cp -r "$FIXTURES/library-basic/." "$tmpdb/"
+    AGENTS_DB="$tmpdb" \
+        CLAUDE_AGENTS="$tmprt" \
+        bash "$PROJECT_ROOT/apm" --platform claude-code link git-mentor > /dev/null 2>&1
+    out=$(AGENTS_DB="$tmpdb" \
+        CLAUDE_AGENTS="$tmprt" \
+        bash "$PROJECT_ROOT/apm" --platform claude-code --json status 2>/dev/null)
+    state=$(echo "$out" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for a in d.get('agents', []):
+    if a.get('id') == 'git-mentor':
+        print(a.get('state', {}).get('sync', ''))
+        break
+" 2>/dev/null)
+    [ "$state" = "linked" ] || { rm -rf "$tmprt"; return 1; }
+
+    linked_path="$tmprt/git-mentor.md"
+    rm -f "$linked_path"
+    ln -s "$tmpdb/git-mentor/git-mentor.md" "$linked_path"
+
+    out=$(AGENTS_DB="$tmpdb" \
+        CLAUDE_AGENTS="$tmprt" \
+        bash "$PROJECT_ROOT/apm" --platform claude-code --json status 2>/dev/null)
+    state=$(echo "$out" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for a in d.get('agents', []):
+    if a.get('id') == 'git-mentor':
+        print(a.get('state', {}).get('sync', ''))
+        break
+" 2>/dev/null)
+    rm -rf "$tmprt" "$tmpdb"
+    [ "$state" = "linked-outdated" ]
+}
+run_test "status: direct links report linked and linked-outdated correctly" test_status_direct_link_reports_linked_then_linked_outdated
+
+test_alias_link_is_accounted_for_not_unmanaged() {
+    local tmprt tmpdb out state unmanaged_count
+    tmprt=$(mktemp -d)
+    tmpdb=$(mktemp -d)
+    cp -r "$FIXTURES/library-basic/." "$tmpdb/"
+    AGENTS_DB="$tmpdb" \
+        CLAUDE_AGENTS="$tmprt" \
+        bash "$PROJECT_ROOT/apm" --platform claude-code link git-mentor --as mentor > /dev/null 2>&1
+    out=$(AGENTS_DB="$tmpdb" \
+        CLAUDE_AGENTS="$tmprt" \
+        bash "$PROJECT_ROOT/apm" --platform claude-code --json status 2>/dev/null)
+    state=$(echo "$out" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for a in d.get('agents', []):
+    if a.get('id') == 'git-mentor':
+        print(a.get('state', {}).get('sync', ''))
+        break
+" 2>/dev/null)
+    unmanaged_count=$(echo "$out" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(sum(1 for a in d.get('agents', [])
+          if a.get('state', {}).get('sync') == 'unmanaged' and a.get('id') == 'mentor'))
+" 2>/dev/null)
+    rm -rf "$tmprt" "$tmpdb"
+    [ "$state" = "linked" ] && [ "$unmanaged_count" = "0" ]
+}
+run_test "status: alias links are tracked and not shown as unmanaged" test_alias_link_is_accounted_for_not_unmanaged
+
+test_unlink_current_scope_only_removes_matching_link() {
+    local global_rt project_root project_rt tmpdb links_json
+    global_rt=$(mktemp -d)
+    project_root=$(mktemp -d)
+    project_rt="$project_root/.claude/agents"
+    tmpdb=$(mktemp -d)
+    mkdir -p "$project_rt"
+    cp -r "$FIXTURES/library-basic/." "$tmpdb/"
+
+    AGENTS_DB="$tmpdb" \
+        CLAUDE_AGENTS="$global_rt" \
+        bash "$PROJECT_ROOT/apm" --platform claude-code link git-mentor --global --as global-mentor > /dev/null 2>&1
+
+    (
+        cd "$project_root" || exit 1
+        AGENTS_DB="$tmpdb" \
+            CLAUDE_AGENTS="$global_rt" \
+            bash "$PROJECT_ROOT/apm" --platform claude-code link git-mentor > /dev/null 2>&1
+    ) || { rm -rf "$global_rt" "$project_root" "$tmpdb"; return 1; }
+
+    (
+        cd "$project_root" || exit 1
+        AGENTS_DB="$tmpdb" \
+            CLAUDE_AGENTS="$global_rt" \
+            APM_FORCE=1 \
+            bash "$PROJECT_ROOT/apm" --platform claude-code unlink git-mentor > /dev/null 2>&1
+    ) || { rm -rf "$global_rt" "$project_root" "$tmpdb"; return 1; }
+
+    [ ! -L "$project_rt/git-mentor.md" ] || { rm -rf "$global_rt" "$project_root" "$tmpdb"; return 1; }
+    [ -L "$global_rt/global-mentor.md" ] || { rm -rf "$global_rt" "$project_root" "$tmpdb"; return 1; }
+
+    links_json=$(python3 "$PROJECT_ROOT/lib/py/apm_python.py" read-links \
+        --id git-mentor \
+        --db "$tmpdb")
+    rm -rf "$global_rt" "$project_root" "$tmpdb"
+    echo "$links_json" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+links=d.get('links', [])
+assert len(links) == 1, links
+assert links[0]['scope'] == 'global', links
+assert links[0]['alias'] == 'global-mentor', links
+" 2>/dev/null
+}
+run_test "unlink: plain unlink removes only the current-scope link" test_unlink_current_scope_only_removes_matching_link
+
+test_unlink_without_matching_scope_fails_when_multiple_links_exist() {
+    local global_rt project_root project_rt tmpdb status
+    global_rt=$(mktemp -d)
+    project_root=$(mktemp -d)
+    project_rt="$project_root/.claude/agents"
+    tmpdb=$(mktemp -d)
+    mkdir -p "$project_rt"
+    cp -r "$FIXTURES/library-basic/." "$tmpdb/"
+
+    (
+        cd "$project_root" || exit 1
+        AGENTS_DB="$tmpdb" \
+            CLAUDE_AGENTS="$global_rt" \
+            bash "$PROJECT_ROOT/apm" --platform claude-code link git-mentor > /dev/null 2>&1
+        AGENTS_DB="$tmpdb" \
+            CLAUDE_AGENTS="$global_rt" \
+            bash "$PROJECT_ROOT/apm" --platform claude-code link git-mentor --as mentor-alias > /dev/null 2>&1
+    ) || { rm -rf "$global_rt" "$project_root" "$tmpdb"; return 1; }
+
+    AGENTS_DB="$tmpdb" \
+        CLAUDE_AGENTS="$global_rt" \
+        APM_FORCE=1 \
+        bash "$PROJECT_ROOT/apm" --platform claude-code unlink git-mentor > /dev/null 2>&1
+    status=$?
+
+    [ -L "$project_rt/git-mentor.md" ] || { rm -rf "$global_rt" "$project_root" "$tmpdb"; return 1; }
+    [ -L "$project_rt/mentor-alias.md" ] || { rm -rf "$global_rt" "$project_root" "$tmpdb"; return 1; }
+    rm -rf "$global_rt" "$project_root" "$tmpdb"
+    [ "$status" -ne 0 ]
+}
+run_test "unlink: plain unlink fails when current scope has no match and multiple links exist" test_unlink_without_matching_scope_fails_when_multiple_links_exist
+
+test_link_bookkeeping_handles_apostrophe_in_runtime_path() {
+    local tmpbase tmprt tmpdb out
+    tmpbase=$(mktemp -d)
+    tmprt="$tmpbase/runtime's"
+    tmpdb=$(mktemp -d)
+    mkdir -p "$tmprt"
+    cp -r "$FIXTURES/library-basic/." "$tmpdb/"
+    AGENTS_DB="$tmpdb" \
+        CLAUDE_AGENTS="$tmprt" \
+        bash "$PROJECT_ROOT/apm" --platform claude-code link git-mentor --as mentor > /dev/null 2>&1
+    out=$(python3 "$PROJECT_ROOT/lib/py/apm_python.py" read-links \
+        --id git-mentor \
+        --db "$tmpdb")
+    rm -rf "$tmpbase" "$tmpdb"
+    echo "$out" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+links=d.get('links', [])
+assert len(links) == 1, links
+assert links[0]['path'].endswith(\"runtime's/mentor.md\"), links
+" 2>/dev/null
+}
+run_test "link: bookkeeping handles apostrophes in runtime paths" test_link_bookkeeping_handles_apostrophe_in_runtime_path
+
 echo ""
 if [ "$ERRORS" -gt 0 ]; then
     echo "FAILED: $ERRORS runtime test(s) failed"

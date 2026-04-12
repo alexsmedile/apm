@@ -278,12 +278,19 @@ def build_manifest(agent_id: str, db_path: str, platform: str,
 
     # Resolve actual runtime filename — use deploy.name if set, else agent_id
     deploy_name = deploy.get('name', agent_id) if deploy.get('enabled') else agent_id
+    runtime_links = _tracked_links_for_agent(
+        agent_id=agent_id,
+        db_path=db_path,
+        platform=platform,
+        runtime_dir=runtime_dir_exp,
+    )
     if runtime_dir_exp:
-        paths['runtime_file'] = os.path.join(runtime_dir_exp, f'{deploy_name}.md')
+        paths['runtime_file'] = _choose_runtime_path(deploy_name, runtime_dir_exp, runtime_links)
         # Also check if there's a file with apm.id matching this agent (canonical lookup)
         _rt_by_id = _find_runtime_by_id(runtime_dir_exp, agent_id)
         if _rt_by_id:
             paths['runtime_file'] = _rt_by_id
+    paths['tracked_runtime_files'] = [lnk['path'] for lnk in runtime_links if lnk.get('path')]
 
     # Runtime metadata
     runtime_meta = None
@@ -361,6 +368,42 @@ def _find_runtime_by_id(runtime_dir: str, agent_id: str) -> str:
     return ''
 
 
+def _tracked_links_for_agent(agent_id: str, db_path: str,
+                             platform: str = '',
+                             runtime_dir: str = '') -> list[dict]:
+    """Return live tracked links for an agent, optionally filtered by platform/runtime dir."""
+    data = read_links(agent_id, db_path)
+    links = data.get('links', [])
+    runtime_dir_exp = os.path.expanduser(runtime_dir) if runtime_dir else ''
+    filtered = []
+    for link in links:
+        path = os.path.expanduser(link.get('path', ''))
+        if not path:
+            continue
+        if platform and link.get('platform') not in ('', None, platform):
+            continue
+        if runtime_dir_exp and os.path.dirname(path) != runtime_dir_exp:
+            continue
+        entry = dict(link)
+        entry['path'] = path
+        filtered.append(entry)
+    return filtered
+
+
+def _choose_runtime_path(deploy_name: str, runtime_dir: str,
+                         runtime_links: list[dict]) -> str:
+    """Choose the primary runtime path for status and diff operations."""
+    runtime_dir_exp = os.path.expanduser(runtime_dir) if runtime_dir else ''
+    default_path = os.path.join(runtime_dir_exp, f'{deploy_name}.md') if runtime_dir_exp else ''
+    if not runtime_links:
+        return default_path
+
+    candidates = sorted(lnk.get('path', '') for lnk in runtime_links if lnk.get('path'))
+    if default_path and default_path in candidates:
+        return default_path
+    return candidates[0] if candidates else default_path
+
+
 def _compute_sync_state(agent_id, agent_dir, root_file, deploy,
                          runtime_meta, runtime_exists, runtime_file,
                          db_path, platform) -> str:
@@ -377,6 +420,20 @@ def _compute_sync_state(agent_id, agent_dir, root_file, deploy,
 
     if not runtime_exists:
         return 'ready'
+
+    # Symlink mode: runtime is a symlink — compare link target to expected split file
+    if os.path.islink(runtime_file):
+        active_body_path, _ = resolve_active_body(agent_dir, agent_id, platform)
+        try:
+            link_target = os.path.realpath(runtime_file)
+            expected = os.path.realpath(active_body_path)
+            if link_target == expected:
+                return 'linked'
+            apm_id = ((runtime_meta or {}).get('apm', {}) or {}).get('id')
+            if apm_id != agent_id:
+                return 'linked-outdated'
+        except Exception:
+            return 'linked-outdated'
 
     # Runtime exists — check if managed
     if runtime_meta is None:
@@ -712,6 +769,9 @@ def status_agents(db_path: str, platform: str, runtime_dir: str) -> dict:
         rt_file = manifest['paths'].get('runtime_file', '')
         if rt_file:
             accounted_rt.add(rt_file)
+        for tracked in manifest['paths'].get('tracked_runtime_files', []):
+            if tracked:
+                accounted_rt.add(tracked)
 
     # Add untracked runtime files as entries
     for fname, info in rt_files.items():
@@ -1364,6 +1424,121 @@ def cmd_scan_unmanaged(args):
     print(_dump(result))
 
 
+def generate_split_file(agent_id: str, db_path: str, platform: str) -> dict:
+    """
+    Auto-generate a platform-specific split file from the root body.
+    Creates instructions/<id>.<platform-alias>@latest.md if it doesn't exist.
+    Returns {path, created, already_existed}.
+    """
+    db_path = os.path.expanduser(db_path)
+    agent_dir = os.path.join(db_path, agent_id)
+    root_file = os.path.join(agent_dir, f'{agent_id}.md')
+
+    if not os.path.isfile(root_file):
+        return {'error': f'Root file not found: {root_file}', 'exit_code': 2}
+
+    alias = PLATFORM_ALIASES.get(platform, platform)
+    instructions_dir = os.path.join(agent_dir, 'instructions')
+    split_file = os.path.join(instructions_dir, f'{agent_id}.{alias}@latest.md')
+
+    if os.path.isfile(split_file):
+        return {'path': split_file, 'created': False, 'already_existed': True}
+
+    # Read root body (frontmatter stripped)
+    try:
+        _, body = parse_agent_file(root_file)
+    except Exception as e:
+        return {'error': f'Failed to read root file: {e}', 'exit_code': 2}
+
+    os.makedirs(instructions_dir, exist_ok=True)
+    try:
+        with open(split_file, 'w', encoding='utf-8') as f:
+            f.write(body)
+    except Exception as e:
+        return {'error': f'Failed to write split file: {e}', 'exit_code': 2}
+
+    return {'path': split_file, 'created': True, 'already_existed': False}
+
+
+def read_links(agent_id: str, db_path: str) -> dict:
+    """Read links.json for an agent. Returns {links: [...]}."""
+    db_path = os.path.expanduser(db_path)
+    links_file = os.path.join(db_path, agent_id, 'links.json')
+    if not os.path.isfile(links_file):
+        return {'links': []}
+    try:
+        with open(links_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        # Prune stale entries (link path no longer exists)
+        links = [lnk for lnk in data.get('links', [])
+                 if os.path.islink(os.path.expanduser(lnk.get('path', '')))]
+        return {'links': links}
+    except Exception as e:
+        return {'error': str(e), 'links': []}
+
+
+def write_links(agent_id: str, db_path: str, links: list) -> dict:
+    """Write links list to links.json. Prunes stale entries first."""
+    db_path = os.path.expanduser(db_path)
+    agent_dir = os.path.join(db_path, agent_id)
+    links_file = os.path.join(agent_dir, 'links.json')
+
+    # Prune stale (path no longer a symlink)
+    live = [lnk for lnk in links
+            if os.path.islink(os.path.expanduser(lnk.get('path', '')))]
+
+    try:
+        os.makedirs(agent_dir, exist_ok=True)
+        with open(links_file, 'w', encoding='utf-8') as f:
+            json.dump({'links': live}, f, indent=2)
+        return {'ok': True, 'links': live}
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def list_all_links(db_path: str) -> dict:
+    """List all agents that have active links. Returns {agents: [{id, links}]}."""
+    db_path = os.path.expanduser(db_path)
+    result = []
+    for agent_id in scan_library(db_path):
+        data = read_links(agent_id, db_path)
+        if data.get('links'):
+            result.append({'id': agent_id, 'links': data['links']})
+    return {'agents': result}
+
+
+def cmd_generate_split(args):
+    result = generate_split_file(
+        agent_id=args.id,
+        db_path=args.db,
+        platform=args.platform,
+    )
+    if 'error' in result:
+        print(_dump(result))
+        sys.exit(result.get('exit_code', 2))
+    print(_dump(result))
+
+
+def cmd_read_links(args):
+    result = read_links(agent_id=args.id, db_path=args.db)
+    print(_dump(result))
+
+
+def cmd_write_links(args):
+    try:
+        links = json.loads(args.links_json)
+    except Exception as e:
+        print(_dump({'error': f'Invalid JSON for links: {e}', 'exit_code': 2}))
+        sys.exit(2)
+    result = write_links(agent_id=args.id, db_path=args.db, links=links)
+    print(_dump(result))
+
+
+def cmd_list_all_links(args):
+    result = list_all_links(db_path=args.db)
+    print(_dump(result))
+
+
 def cmd_generate_runtime(args):
     result = generate_runtime_content(
         agent_id=args.id,
@@ -1493,6 +1668,27 @@ def main():
     p.add_argument('--platform', required=True)
     p.add_argument('--timestamp', required=True)
 
+    # generate-split
+    p = subparsers.add_parser('generate-split')
+    p.add_argument('--id', required=True)
+    p.add_argument('--db', required=True)
+    p.add_argument('--platform', required=True)
+
+    # read-links
+    p = subparsers.add_parser('read-links')
+    p.add_argument('--id', required=True)
+    p.add_argument('--db', required=True)
+
+    # write-links
+    p = subparsers.add_parser('write-links')
+    p.add_argument('--id', required=True)
+    p.add_argument('--db', required=True)
+    p.add_argument('--links-json', required=True)
+
+    # list-all-links
+    p = subparsers.add_parser('list-all-links')
+    p.add_argument('--db', required=True)
+
     # scan-unmanaged
     p = subparsers.add_parser('scan-unmanaged')
     p.add_argument('--runtime-dir', required=True)
@@ -1531,6 +1727,10 @@ def main():
         'analyze-import': cmd_analyze_import,
         'build-import-draft': cmd_build_import_draft,
         'scan-unmanaged': cmd_scan_unmanaged,
+        'generate-split': cmd_generate_split,
+        'read-links': cmd_read_links,
+        'write-links': cmd_write_links,
+        'list-all-links': cmd_list_all_links,
         'github-diff': cmd_github_diff,
         'github-status': cmd_github_status,
     }

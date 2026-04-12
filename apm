@@ -329,15 +329,17 @@ if not agents:
         print(\"  (no agents found)\")
     sys.exit(0)
 
-# Sort order per TUI.md §9: collision, untracked, outdated, ready, orphan, in-sync, no-deploy
+# Sort order per TUI.md §9: collision, untracked, outdated, ready, orphan, in-sync, linked, no-deploy
 ORDER = {
-    'collision': 0, 'unmanaged': 1, 'outdated': 2,
-    'ready': 3, 'orphan': 4, 'in-sync': 5, 'no-deploy': 6,
+    'collision': 0, 'unmanaged': 1, 'outdated': 2, 'linked-outdated': 3,
+    'ready': 4, 'orphan': 5, 'in-sync': 6, 'linked': 7, 'no-deploy': 8,
 }
 agents.sort(key=lambda a: ORDER.get(a.get('state',{}).get('sync',''), 99))
 
 symbols = {
     'in-sync':           '  ✓',
+    'linked':            '  ⤷',
+    'linked-outdated':   '  ⤸',
     'outdated':          '  ~',
     'ready':             '  ○',
     'no-deploy':         '  -',
@@ -358,6 +360,8 @@ C = {
 }
 STATE_COLOR = {
     'in-sync':           C['green'],
+    'linked':            C['green'],
+    'linked-outdated':   C['yellow'],
     'outdated':          C['yellow'],
     'ready':             C['cyan'],
     'unmanaged': C['yellow'],
@@ -502,7 +506,7 @@ from collections import Counter
 data = json.load(sys.stdin)
 agents = data.get('agents', [])
 counts = Counter(a.get('state',{}).get('sync','?') for a in agents)
-order = ['collision','unmanaged','outdated','ready','orphan','in-sync','no-deploy']
+order = ['collision','unmanaged','outdated','linked-outdated','ready','orphan','in-sync','linked','no-deploy']
 
 tty = sys.stdout.isatty()
 C = {
@@ -516,6 +520,8 @@ C = {
 }
 STATE_COLOR = {
     'in-sync':           C['green'],
+    'linked':            C['green'],
+    'linked-outdated':   C['yellow'],
     'outdated':          C['yellow'],
     'ready':             C['cyan'],
     'unmanaged': C['yellow'],
@@ -2196,6 +2202,423 @@ _apply_github_stage() {
 }
 
 # ---------------------------------------------------------------------------
+# Symlink helpers
+# ---------------------------------------------------------------------------
+
+# Read links.json for an agent and print the links array as JSON
+_apm_read_links() {
+    local id="$1"
+    _apm_py read-links --id "$id" --db "$APM_AGENTS_DB"
+}
+
+# Write an updated links list back to links.json
+_apm_write_links() {
+    local id="$1"
+    local links_json="$2"
+    _apm_py write-links --id "$id" --db "$APM_AGENTS_DB" --links-json "$links_json"
+}
+
+# Resolve the platform-specific split file for an agent.
+# Prints the absolute path if found, or empty string.
+_apm_resolve_split_file() {
+    local id="$1"
+    local platform="$2"
+    local manifest
+    manifest=$(_apm_py build-manifest \
+        --id "$id" \
+        --db "$APM_AGENTS_DB" \
+        --platform "$platform" \
+        --runtime-dir "$APM_RUNTIME_DIR" 2>/dev/null)
+    echo "$manifest" | python3 -c "
+import json, sys, os
+d = json.load(sys.stdin)
+p = d.get('paths', {}).get('active_body_file', '')
+print(os.path.realpath(p) if p and os.path.isfile(p) else '')
+" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# cmd_link — create a symlink for an agent
+# ---------------------------------------------------------------------------
+
+cmd_link() {
+    local id=""
+    local alias=""
+    local scope_flag=""
+    local old_global_force="${APM_GLOBAL_FORCE:-0}"
+    local old_runtime_dir="${APM_RUNTIME_DIR:-}"
+    local old_scope="${APM_SCOPE:-}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --as)
+                [ $# -lt 2 ] && apm_die 2 "--as requires a value"
+                alias="$2"; shift 2 ;;
+            --project)  scope_flag="project"; shift ;;
+            --global|-g) scope_flag="global"; shift ;;
+            -*) shift ;;
+            *) [ -z "$id" ] && id="$1"; shift ;;
+        esac
+    done
+
+    if [ -z "$id" ]; then
+        apm_die 2 "Usage: apm link <id> [--as <alias>] [--project|--global]"
+    fi
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    # Determine runtime dir based on scope flag
+    local runtime_dir="${APM_RUNTIME_DIR}"
+    local scope="${APM_SCOPE}"
+    if [ "$scope_flag" = "global" ]; then
+        APM_GLOBAL_FORCE=1
+        _apm_resolve_runtime_and_scope
+        runtime_dir="${APM_RUNTIME_DIR}"
+        scope="global"
+    elif [ "$scope_flag" = "project" ]; then
+        APM_GLOBAL_FORCE=0
+        _apm_resolve_runtime_and_scope
+        runtime_dir="${APM_RUNTIME_DIR}"
+        scope="${APM_SCOPE}"
+        if [ "$scope" != "project" ]; then
+            apm_die 2 "No project agents directory found. Run: apm init first."
+        fi
+    fi
+    APM_GLOBAL_FORCE="$old_global_force"
+    APM_RUNTIME_DIR="$old_runtime_dir"
+    APM_SCOPE="$old_scope"
+
+    if [ -z "$runtime_dir" ]; then
+        apm_die 2 "No runtime directory for platform '$APM_PLATFORM'"
+    fi
+
+    # Resolve split file
+    local split_file
+    split_file=$(_apm_resolve_split_file "$id" "$APM_PLATFORM")
+
+    # If no split file, offer to auto-generate
+    if [ -z "$split_file" ]; then
+        echo ""
+        printf "  No platform split file found for '%s' (%s).\n" "$id" "$APM_PLATFORM"
+        printf "  Auto-generate from root body? [y/N] "
+        read -r _confirm
+        case "$_confirm" in
+            [yY]*)
+                local gen_result
+                gen_result=$(_apm_py generate-split \
+                    --id "$id" \
+                    --db "$APM_AGENTS_DB" \
+                    --platform "$APM_PLATFORM")
+                if echo "$gen_result" | python3 -c "import json,sys; sys.exit(0 if 'error' not in json.load(sys.stdin) else 1)" 2>/dev/null; then
+                    split_file=$(echo "$gen_result" | python3 -c "import json,sys; print(json.load(sys.stdin)['path'])")
+                    echo "  Generated: $split_file"
+                else
+                    local err
+                    err=$(echo "$gen_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('error',''))")
+                    apm_die 2 "Failed to generate split file: $err"
+                fi
+                ;;
+            *)
+                echo "  Cancelled."
+                echo ""
+                return 0
+                ;;
+        esac
+    fi
+
+    # Determine runtime filename (alias overrides deploy.name)
+    local link_name
+    if [ -n "$alias" ]; then
+        link_name="${alias}.md"
+    else
+        # Use deploy.name from manifest, fall back to id
+        local manifest
+        manifest=$(_apm_py build-manifest \
+            --id "$id" \
+            --db "$APM_AGENTS_DB" \
+            --platform "$APM_PLATFORM" \
+            --runtime-dir "$runtime_dir" 2>/dev/null)
+        local deploy_name
+        deploy_name=$(echo "$manifest" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['deploy'].get('name','') or d['id'])" 2>/dev/null)
+        link_name="${deploy_name:-$id}.md"
+    fi
+
+    local runtime_file="${runtime_dir}/${link_name}"
+
+    echo ""
+    printf "  %-12s : %s\n" "Agent" "$id"
+    printf "  %-12s : %s\n" "Platform" "$APM_PLATFORM"
+    printf "  %-12s : %s\n" "Scope" "$scope"
+    [ -n "$alias" ] && printf "  %-12s : %s\n" "Alias" "$alias"
+    printf "  %-12s : %s\n" "Source" "$split_file"
+    printf "  %-12s : %s\n" "Symlink" "$runtime_file"
+    echo ""
+
+    if [ "$APM_DRY_RUN" = "1" ]; then
+        echo "  (dry run — nothing written)"
+        echo ""
+        return 0
+    fi
+
+    # Warn if destination already exists
+    if [ -e "$runtime_file" ] || [ -L "$runtime_file" ]; then
+        if [ -L "$runtime_file" ]; then
+            echo "  Existing symlink will be replaced."
+        else
+            apm_warn "A non-symlink file already exists at: $runtime_file"
+            printf "  Replace it? [y/N] "
+            read -r _confirm
+            case "$_confirm" in
+                [yY]*) ;;
+                *) echo "  Cancelled."; echo ""; return 0 ;;
+            esac
+        fi
+    fi
+
+    # Ensure runtime dir exists
+    apm_ensure_dir "$runtime_dir"
+
+    # Create symlink (absolute path for portability across directories)
+    ln -sf "$split_file" "$runtime_file" || apm_die 2 "Failed to create symlink: $runtime_file"
+
+    # Update links.json
+    local existing_links_json
+    existing_links_json=$(_apm_read_links "$id" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin).get('links',[])))" 2>/dev/null)
+
+    local timestamp
+    timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    local alias_val="${alias:-}"
+    local new_links_json
+    new_links_json=$(python3 -c "
+import json, sys
+links = json.loads(sys.argv[1])
+new_path = sys.argv[2]
+# Remove any existing entry for this path
+links = [l for l in links if l.get('path') != new_path]
+links.append({
+    'path': new_path,
+    'platform': sys.argv[3],
+    'scope': sys.argv[4],
+    'alias': sys.argv[5] or None,
+    'linked_at': sys.argv[6],
+})
+print(json.dumps(links))
+" "$existing_links_json" "$runtime_file" "$APM_PLATFORM" "$scope" "$alias_val" "$timestamp" 2>/dev/null)
+
+    _apm_write_links "$id" "$new_links_json" > /dev/null 2>&1 || true
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        python3 -c "import json; print(json.dumps({'command':'link','id':'$id','platform':'$APM_PLATFORM','scope':'$scope','symlink':'$runtime_file','source':'$split_file','success':True}))"
+    else
+        echo "  Linked."
+        echo ""
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# cmd_unlink — remove a symlink for an agent
+# ---------------------------------------------------------------------------
+
+cmd_unlink() {
+    local id=""
+    local scope_flag=""
+    local do_all=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --project)  scope_flag="project"; shift ;;
+            --global|-g) scope_flag="global"; shift ;;
+            --all)      do_all=1; shift ;;
+            -*) shift ;;
+            *) [ -z "$id" ] && id="$1"; shift ;;
+        esac
+    done
+
+    if [ -z "$id" ]; then
+        apm_die 2 "Usage: apm unlink <id> [--project|--global|--all]"
+    fi
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    # Load all recorded links for this agent
+    local links_data
+    links_data=$(_apm_read_links "$id")
+    local link_count
+    link_count=$(echo "$links_data" | python3 -c "import json,sys; print(len(json.load(sys.stdin).get('links',[])))" 2>/dev/null)
+
+    if [ "$link_count" = "0" ]; then
+        apm_die 2 "No active links found for '$id'."
+    fi
+
+    # Determine which links to remove
+    local targets_json
+    if [ "$do_all" = "1" ]; then
+        targets_json=$(echo "$links_data" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin).get('links',[])))" 2>/dev/null)
+    elif [ -n "$scope_flag" ]; then
+        targets_json=$(echo "$links_data" | python3 -c "
+import json, sys
+links = json.load(sys.stdin).get('links', [])
+scope = '$scope_flag'
+print(json.dumps([l for l in links if l.get('scope') == scope]))
+" 2>/dev/null)
+    else
+        # Use current resolved scope
+        targets_json=$(echo "$links_data" | python3 -c "
+import json, sys
+links = json.load(sys.stdin).get('links', [])
+scope = '$APM_SCOPE'
+filtered = [l for l in links if l.get('scope') == scope]
+if filtered:
+    print(json.dumps(filtered))
+elif len(links) == 1:
+    print(json.dumps(links))
+else:
+    print(json.dumps([]))
+" 2>/dev/null)
+    fi
+
+    local target_count
+    target_count=$(echo "$targets_json" | python3 -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$targets_json" 2>/dev/null)
+
+    if [ "$target_count" = "0" ]; then
+        if [ -n "$scope_flag" ]; then
+            apm_die 2 "No links found matching the requested scope."
+        fi
+        apm_die 2 "No links found for current scope '$APM_SCOPE'. Use --project, --global, or --all."
+    fi
+
+    echo ""
+    echo "  Will remove $target_count link(s) for '$id':"
+    echo "$targets_json" | python3 -c "
+import json, sys
+for l in json.loads(sys.argv[1]):
+    print(f'    {l[\"scope\"]:<10} {l[\"path\"]}')
+" "$targets_json" 2>/dev/null
+    echo ""
+
+    if [ "$APM_DRY_RUN" = "1" ]; then
+        echo "  (dry run — nothing removed)"
+        echo ""
+        return 0
+    fi
+
+    if [ "$APM_FORCE" != "1" ]; then
+        printf "  Proceed? [y/N] "
+        read -r _confirm
+        case "$_confirm" in
+            [yY]*) ;;
+            *) echo "  Cancelled."; echo ""; return 0 ;;
+        esac
+    fi
+
+    local removed=0
+    while IFS= read -r link_path; do
+        if [ -L "$link_path" ]; then
+            rm "$link_path" && removed=$((removed + 1)) || apm_warn "Failed to remove: $link_path"
+        elif [ -e "$link_path" ]; then
+            apm_warn "Not a symlink, skipping: $link_path"
+        fi
+    done < <(echo "$targets_json" | python3 -c "
+import json, sys
+for l in json.loads(sys.argv[1]):
+    print(l['path'])
+" "$targets_json" 2>/dev/null)
+
+    # Update links.json (pruning removed paths)
+    local paths_to_remove
+    paths_to_remove=$(echo "$targets_json" | python3 -c "
+import json, sys
+print(json.dumps([l['path'] for l in json.loads(sys.argv[1])]))
+" "$targets_json" 2>/dev/null)
+
+    local existing_links_json
+    existing_links_json=$(_apm_read_links "$id" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin).get('links',[])))" 2>/dev/null)
+    local new_links_json
+    new_links_json=$(python3 -c "
+import json, sys
+links = json.loads(sys.argv[1])
+remove = set(json.loads(sys.argv[2]))
+print(json.dumps([l for l in links if l.get('path') not in remove]))
+" "$existing_links_json" "$paths_to_remove" 2>/dev/null)
+    _apm_write_links "$id" "$new_links_json" > /dev/null 2>&1 || true
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        echo "{\"command\":\"unlink\",\"id\":\"$id\",\"removed\":$removed}"
+    else
+        echo "  Removed $removed link(s)."
+        echo ""
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# cmd_links — list all tracked links
+# ---------------------------------------------------------------------------
+
+cmd_links() {
+    local id="${1:-}"
+
+    if [ -z "$APM_AGENTS_DB" ]; then
+        apm_die 2 "No library path configured. Run: apm setup"
+    fi
+
+    local out
+    if [ -n "$id" ]; then
+        out=$(_apm_read_links "$id")
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            echo "$out"
+            return 0
+        fi
+        echo ""
+        echo "$out" | python3 -c "
+import json, sys, os
+d = json.load(sys.stdin)
+links = d.get('links', [])
+if not links:
+    print('  (no active links)')
+else:
+    for l in links:
+        path = l.get('path', '')
+        scope = l.get('scope', '?')
+        alias = l.get('alias') or ''
+        tty = sys.stdout.isatty()
+        ok = os.path.islink(path)
+        status = 'ok' if ok else 'broken'
+        alias_str = f'  (alias: {alias})' if alias else ''
+        print(f'  {scope:<10} {path}{alias_str}  [{status}]')
+"
+        echo ""
+    else
+        out=$(_apm_py list-all-links --db "$APM_AGENTS_DB")
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            echo "$out"
+            return 0
+        fi
+        echo ""
+        echo "$out" | python3 -c "
+import json, sys, os
+d = json.load(sys.stdin)
+agents = d.get('agents', [])
+if not agents:
+    print('  (no agents with active links)')
+else:
+    for a in agents:
+        aid = a['id']
+        for l in a.get('links', []):
+            path = l.get('path', '')
+            scope = l.get('scope', '?')
+            alias = l.get('alias') or ''
+            ok = os.path.islink(path)
+            status = 'ok' if ok else 'broken'
+            alias_str = f'  (alias: {alias})' if alias else ''
+            print(f'  {aid:<28}  {scope:<10} {path}{alias_str}  [{status}]')
+"
+        echo ""
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Update: reinstall all outdated agents
 # ---------------------------------------------------------------------------
 
@@ -2438,6 +2861,9 @@ cmd_interactive() {
                 echo "  remove <id>        Remove agent from runtime (alias: rm)"
                 echo "  update [id]        Reinstall outdated agents (all or one)"
                 echo "  import [id|path]   Import runtime agent into library"
+                echo "  link <id>          Symlink agent split file into runtime dir"
+                echo "  unlink <id>        Remove symlink(s) for an agent"
+                echo "  links [id]         List tracked symlinks"
                 echo "  validate [id]      Validate agent(s)"
                 echo "  github <sub>       GitHub commands (connect/status/push/pull/diff)"
                 echo "  setup              Re-run setup wizard"
@@ -2470,6 +2896,16 @@ cmd_interactive() {
                 # word-split intentional: agent IDs/paths contain no spaces
                 # shellcheck disable=SC2086
                 cmd_import $_iargs ;;
+            link)
+                [ -z "$_iargs" ] && { echo "  Usage: link <id> [--as <alias>] [--project|--global]"; continue; }
+                # shellcheck disable=SC2086
+                cmd_link $_iargs ;;
+            unlink)
+                [ -z "$_iargs" ] && { echo "  Usage: unlink <id> [--project|--global|--all]"; continue; }
+                # shellcheck disable=SC2086
+                cmd_unlink $_iargs ;;
+            links)
+                cmd_links "$_iargs" ;;
             validate)
                 cmd_validate "$_iargs" ;;
             github)
@@ -2547,6 +2983,15 @@ main() {
         import)
             cmd_import "${_REMAINING_ARGS[@]:1}"
             ;;
+        link)
+            cmd_link "${_REMAINING_ARGS[@]:1}"
+            ;;
+        unlink)
+            cmd_unlink "${_REMAINING_ARGS[@]:1}"
+            ;;
+        links)
+            cmd_links "${_REMAINING_ARGS[1]:-}"
+            ;;
         github)
             cmd_github "${_REMAINING_ARGS[@]:1}"
             ;;
@@ -2585,6 +3030,9 @@ Commands:
   update [id]                  Reinstall outdated agents (all if no id given)
   import                       Pick from unmanaged runtime agents (interactive)
   import [id]                  Import specific agent, or --all for everything
+  link <id> [--as <alias>] [--project|--global]   Symlink agent split file into runtime dir
+  unlink <id> [--project|--global|--all]           Remove symlink(s) for an agent
+  links [id]                   List tracked symlinks (all agents or one)
   github <sub>                 GitHub sync (connect, status, diff, push, pull)
   version                      Show apm version
 
