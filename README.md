@@ -78,6 +78,7 @@ apm setup                # configure library path, platform, optional GitHub
 ```bash
 apm list                 # show all agents and sync state
 apm install git-mentor   # install agent to runtime (~/.claude/agents/)
+apm link git-mentor      # symlink runtime file directly to split instructions
 apm diff git-mentor      # compare library vs runtime
 apm update               # reinstall all outdated agents
 apm import               # import unmanaged runtime agents into library
@@ -127,6 +128,32 @@ apm install --cat devtools
 
 `apm list` shows the category column when any agents have one set.
 
+## Install modes and direct symlinks
+
+`apm` supports two different symlink-based workflows:
+
+- `install` with `INSTALL_MODE=symlink`:
+  `apm` writes the generated runtime file into `~/.agents/` and symlinks the tool-specific runtime path back to that managed file. This keeps frontmatter like `apm.id`, `installed-at`, and deploy metadata intact.
+- `link` / `unlink`:
+  `apm link <id>` creates a runtime symlink that points directly at the resolved split instruction body in your library. This is useful when you want runtime to follow the library body exactly without generating a runtime wrapper file.
+
+Examples:
+
+```bash
+apm install git-mentor                     # normal copy install
+INSTALL_MODE=symlink apm install git-mentor
+apm link git-mentor
+apm link git-mentor --as review-helper
+apm links
+apm unlink git-mentor --all
+```
+
+Notes:
+- `link` resolves the active body using the normal platform precedence: `<id>.<platform>@latest.md`, then `<id>@latest.md`, then the root file body.
+- If the split file does not exist yet, `apm link` can generate `instructions/<id>.<platform-alias>@latest.md` from the root body.
+- `unlink` removes only tracked symlinks and refuses to delete regular files.
+- Plain `unlink` targets the current scope. Use `--project`, `--global`, or `--all` to be explicit when needed.
+
 ## GitHub sync
 
 Two modes:
@@ -152,6 +179,9 @@ apm github pull git-mentor   # pull one agent (staged by default)
 | `install <id> [id…]` | Install one or more agents by ID |
 | `install --all` | Install every ready/outdated agent |
 | `install --cat <name>` | Install all agents in a category |
+| `link <id>` | Symlink agent body directly into the runtime dir |
+| `unlink <id>` | Remove tracked symlink(s) for an agent |
+| `links [id]` | List tracked symlinks for one agent or all agents |
 | `remove <id>` | Remove agent from runtime |
 | `update [id]` | Reinstall outdated agent(s) — omit for all |
 | `import` | Pick from unmanaged runtime agents (interactive) |
@@ -168,6 +198,7 @@ apm github pull git-mentor   # pull one agent (staged by default)
 ```
 --db <path>        Override library path
 --platform <name>  Override platform (claude-code, cursor, codex, gemini, generic)
+--install-mode     Override install mode (`copy` or `symlink`)
 --json             Machine-readable JSON output
 --dry-run          Preview without writing
 --force            Skip confirmation prompts
@@ -178,6 +209,8 @@ apm github pull git-mentor   # pull one agent (staged by default)
 | Symbol | State | Meaning |
 |--------|-------|---------|
 | `✓` | in-sync | Runtime matches library |
+| `⤷` | linked | Runtime is a direct symlink to the active library body |
+| `⤸` | linked-outdated | Runtime is a symlink, but points to the wrong target |
 | `~` | outdated | Runtime installed but behind library |
 | `○` | ready | In library, not yet installed |
 | `!` | unmanaged | Runtime file with no library entry |

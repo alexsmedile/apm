@@ -113,6 +113,8 @@ Sync states:
 | Symbol | State | Meaning |
 |--------|-------|---------|
 | `✓` | in-sync | Runtime matches library |
+| `⤷` | linked | Runtime is a direct symlink to the active library body |
+| `⤸` | linked-outdated | Runtime symlink points somewhere other than the active body |
 | `~` | outdated | Runtime installed but behind library |
 | `○` | ready | In library, not yet installed |
 | `!` | unmanaged | In runtime but not in library — importable |
@@ -163,6 +165,40 @@ apm --dry-run install --cat devtools
 ```
 
 Installed files go to the platform runtime dir, e.g. `~/.claude/agents/` for claude-code.
+
+### Optional: use symlink mode for installs
+
+If you prefer tool runtime files to point back at a managed file in `~/.agents/`, use:
+
+```bash
+INSTALL_MODE=symlink apm install git-mentor
+```
+
+In this mode `apm` still generates a normal runtime file with frontmatter and `apm.id`; only the tool-specific runtime path becomes a symlink.
+
+### Optional: link runtime directly to the library body
+
+If you want runtime to point straight at the resolved split instruction file instead of a generated runtime wrapper, use:
+
+```bash
+apm link git-mentor
+apm link git-mentor --as review-helper
+apm links
+```
+
+`apm link`:
+- resolves the active body using the normal platform precedence
+- can auto-generate `instructions/<id>.<platform-alias>@latest.md` from the root body if needed
+- tracks created symlinks so `apm unlink` can remove them safely later
+
+Remove tracked links with:
+
+```bash
+apm unlink git-mentor
+apm unlink git-mentor --all
+```
+
+Use `remove` for installed runtime files, and `unlink` for tracked symlinks.
 
 ## 6. Check Whether Runtime Matches the Library
 
