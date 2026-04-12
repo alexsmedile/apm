@@ -73,6 +73,10 @@ apm list
 
 Shows each agent with its sync symbol, ID, category (if set), and state name.
 
+Direct runtime links show up as:
+- `linked` — the runtime symlink points at the expected active body
+- `linked-outdated` — the runtime symlink exists, but points at the wrong target
+
 ### How do I install one agent to Claude Code?
 
 ```text
@@ -80,6 +84,51 @@ apm install git-mentor
 ```
 
 `apm` resolves: canonical ID → platform → runtime alias → target file path.
+
+### Can installs use symlinks instead of copying the runtime file?
+
+Yes.
+
+```text
+INSTALL_MODE=symlink apm install git-mentor
+```
+
+In this mode, `apm` still generates a normal managed runtime file in `~/.agents/`, then creates a tool-specific symlink back to it.
+This preserves `apm.id` metadata and keeps `diff` / `update` behavior the same as a normal install.
+
+### What is the difference between `install` symlink mode and `apm link`?
+
+They solve different problems:
+
+- `INSTALL_MODE=symlink apm install ...`
+  creates a symlink to a generated runtime file in `~/.agents/`
+- `apm link <id>`
+  creates a symlink that points directly at the active instruction body in the library
+
+Use `install` symlink mode when you still want a managed runtime wrapper file.
+Use `link` when you want runtime to mirror the split instruction body directly.
+
+### How do I create a direct runtime symlink to the library body?
+
+```text
+apm link git-mentor
+apm link git-mentor --as review-helper
+apm links
+```
+
+If the platform-specific split file does not exist yet, `apm link` can generate it from the root body.
+
+### How do I remove a direct symlink later?
+
+```text
+apm unlink git-mentor
+apm unlink git-mentor --project
+apm unlink git-mentor --global
+apm unlink git-mentor --all
+```
+
+`unlink` removes only tracked symlinks and refuses to delete regular files.
+Without a scope flag, it removes links only in the current resolved scope.
 
 ### How do I install multiple agents at once?
 
