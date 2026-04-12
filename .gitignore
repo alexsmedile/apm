@@ -26,6 +26,8 @@ config.sh
 
 # Archive (old plans, drafts, superseded docs)
 _archive/
+_backup/
+_backups/
 
 # Logs
 *.log
