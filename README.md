@@ -1,7 +1,7 @@
 # apm — Agent Package Manager
 _Write an agent once. Install it everywhere._
 
-**A CLI package manager for AI agent prompt files.**
+**A local-first CLI package manager for AI agent and skill files.**
 
 `apm` syncs your library of agent definitions and manages their installation into agentic coding tools (e.g. Claude Code, Codex, Gemini, etc.).
 
@@ -77,9 +77,9 @@ apm setup                # configure library path, platform, optional GitHub
 
 ```bash
 apm list                 # show all agents and sync state
-apm install git-mentor   # install agent to runtime (~/.claude/agents/)
-apm link git-mentor      # symlink runtime file directly to split instructions
-apm diff git-mentor      # compare library vs runtime
+apm install agent-mentor   # install agent to runtime (~/.claude/agents/)
+apm link agent-mentor      # symlink runtime file directly to split instructions
+apm diff agent-mentor      # compare library vs runtime
 apm update               # reinstall all outdated agents
 apm import               # import unmanaged runtime agents into library
 ```
@@ -196,13 +196,13 @@ Skills are not installable for `cursor`, `continue`, or `generic` in the current
 Examples:
 
 ```bash
-apm install git-mentor                     # normal copy install
-INSTALL_MODE=symlink apm install git-mentor
+apm install agent-mentor                     # normal copy install
+INSTALL_MODE=symlink apm install agent-mentor
 apm --mode skills --platform claude-code install browser-use
-apm link git-mentor
-apm link git-mentor --as review-helper
+apm link agent-mentor
+apm link agent-mentor --as review-helper
 apm links
-apm unlink git-mentor --all
+apm unlink agent-mentor --all
 ```
 
 Notes:
@@ -220,7 +220,7 @@ Two modes:
 ```bash
 apm github connect           # configure mode, owner, repo
 apm github push --all        # push everything
-apm github pull git-mentor   # pull one agent (staged by default)
+apm github pull agent-mentor   # pull one agent (staged by default)
 ```
 
 ## Commands
