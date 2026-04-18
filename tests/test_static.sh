@@ -34,6 +34,7 @@ echo "=== Static Validation ==="
 [ -f "$PROJECT_ROOT/lib/shell/ui.shlib" ]          && check_shell "$PROJECT_ROOT/lib/shell/ui.shlib"         || echo "SKIP: ui.shlib"
 [ -f "$PROJECT_ROOT/lib/shell/fs.shlib" ]          && check_shell "$PROJECT_ROOT/lib/shell/fs.shlib"         || echo "SKIP: fs.shlib"
 [ -f "$PROJECT_ROOT/lib/py/apm_python.py" ]        && check_python "$PROJECT_ROOT/lib/py/apm_python.py"      || echo "SKIP: apm_python.py"
+[ -f "$PROJECT_ROOT/lib/py/apm_tui.py" ]           && check_python "$PROJECT_ROOT/lib/py/apm_tui.py"         || echo "SKIP: apm_tui.py"
 
 echo ""
 if [ "$ERRORS" -gt 0 ]; then

@@ -49,6 +49,7 @@ _apm_py() {
 # ---------------------------------------------------------------------------
 
 _CLI_DB=""
+_CLI_MODE=""
 _CLI_PLATFORM=""
 _CLI_INSTALL_MODE=""
 : "${APM_JSON_MODE:=0}"
@@ -66,6 +67,9 @@ _apm_parse_global_flags() {
             --platform)
                 [ $# -lt 2 ] && apm_die 2 "--platform requires a value"
                 _CLI_PLATFORM="$2"; shift 2 ;;
+            --mode)
+                [ $# -lt 2 ] && apm_die 2 "--mode requires a value (agents|skills)"
+                _CLI_MODE="$2"; shift 2 ;;
             --json)          APM_JSON_MODE=1; export APM_JSON_MODE; shift ;;
             --dry-run)       APM_DRY_RUN=1; export APM_DRY_RUN; shift ;;
             --force)         APM_FORCE=1; export APM_FORCE; shift ;;
@@ -79,6 +83,19 @@ _apm_parse_global_flags() {
         esac
     done
     _REMAINING_ARGS=("${_pos_args[@]+"${_pos_args[@]}"}")
+}
+
+_apm_require_agents_mode() {
+    if [ "${APM_MODE:-agents}" != "agents" ]; then
+        apm_die 2 "Command '${1:-this command}' is only supported in agents mode"
+    fi
+}
+
+_apm_title_case_active_kind() {
+    case "${APM_ACTIVE_KIND:-agent}" in
+        skill) echo "Skill" ;;
+        *)     echo "Agent" ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------
@@ -105,16 +122,27 @@ cmd_init() {
     done
 
     local local_dir=""
-    case "$target_plat" in
-        claude-code) local_dir="./.claude/agents" ;;
-        cursor)      local_dir="./.cursor/agents" ;;
-        codex)       local_dir="./.codex/agents" ;;
-        gemini)      local_dir="./.gemini" ;;
-        windsurf)    local_dir="./.windsurf/rules" ;;
-        continue)    local_dir="./.continue/rules" ;;
-        agents-dir)  local_dir="./.agents" ;;
-        *)           apm_die 2 "Initialization not supported for platform: $target_plat" ;;
-    esac
+    if [ "${APM_MODE}" = "skills" ]; then
+        case "$target_plat" in
+            claude-code) local_dir="./.claude/skills" ;;
+            codex)       local_dir="./.codex/skills" ;;
+            gemini)      local_dir="./.gemini/skills" ;;
+            windsurf)    local_dir="./.windsurf/skills" ;;
+            agents-dir)  local_dir="./.agents/skills" ;;
+            *)           apm_die 2 "Skill initialization not supported for platform: $target_plat" ;;
+        esac
+    else
+        case "$target_plat" in
+            claude-code) local_dir="./.claude/agents" ;;
+            cursor)      local_dir="./.cursor/agents" ;;
+            codex)       local_dir="./.codex/agents" ;;
+            gemini)      local_dir="./.gemini" ;;
+            windsurf)    local_dir="./.windsurf/rules" ;;
+            continue)    local_dir="./.continue/rules" ;;
+            agents-dir)  local_dir="./.agents" ;;
+            *)           apm_die 2 "Initialization not supported for platform: $target_plat" ;;
+        esac
+    fi
 
     echo ""
     echo "  Initializing project scope for platform: $target_plat"
@@ -149,7 +177,11 @@ cmd_config() {
         python3 -c "
 import json, sys
 print(json.dumps({
+    'mode':            '${APM_MODE}',
+    'default_mode':    '${APM_DEFAULT_MODE}',
+    'active_db':       '${APM_ACTIVE_DB}',
     'agents_db':       '${APM_AGENTS_DB}',
+    'skills_db':       '${APM_SKILLS_DB}',
     'platform':        '${APM_PLATFORM}',
     'scope':           '${APM_SCOPE}',
     'runtime_dir':     '${APM_RUNTIME_DIR}',
@@ -166,6 +198,10 @@ print(json.dumps({
     'github_owner':    '${APM_GITHUB_OWNER}',
     'github_monorepo': '${APM_GITHUB_MONOREPO}',
     'github_branch':   '${APM_GITHUB_BRANCH}',
+    'skills_github_mode':     '${APM_SKILLS_GITHUB_MODE}',
+    'skills_github_owner':    '${APM_SKILLS_GITHUB_OWNER}',
+    'skills_github_monorepo': '${APM_SKILLS_GITHUB_MONOREPO}',
+    'skills_github_branch':   '${APM_SKILLS_GITHUB_BRANCH}',
     'config_file':     '${_APM_CONFIG_FILE}',
 }, indent=2))
 "
@@ -175,10 +211,15 @@ print(json.dumps({
     echo ""
     echo "Config file : ${_APM_CONFIG_FILE}"
     echo ""
+    echo "  Mode            : ${APM_MODE}"
+    echo "  Default mode    : ${APM_DEFAULT_MODE}"
     echo "  Platform        : ${APM_PLATFORM}"
     echo "  Scope           : ${APM_SCOPE}"
-    echo "  Library (db)    : ${APM_AGENTS_DB:-<not set>}"
+    echo "  Active db       : ${APM_ACTIVE_DB:-<not set>}"
     echo "  Runtime dir     : ${APM_RUNTIME_DIR:-<not set>}"
+    echo ""
+    echo "  Agents db       : ${APM_AGENTS_DB:-<not set>}"
+    echo "  Skills db       : ${APM_SKILLS_DB:-<not set>}"
     echo ""
     echo "  Claude agents   : ${APM_CLAUDE_AGENTS}"
     echo "  Cursor agents   : ${APM_CURSOR_AGENTS}"
@@ -190,19 +231,18 @@ print(json.dumps({
     echo "  Install mode    : ${APM_INSTALL_MODE}"
     echo "  Generic export  : ${APM_GENERIC_EXPORT}"
     echo ""
-    if [ -n "${APM_GITHUB_MODE}" ]; then
-        echo "  GitHub mode     : ${APM_GITHUB_MODE}"
-        echo "  GitHub owner    : ${APM_GITHUB_OWNER}"
-        [ -n "${APM_GITHUB_MONOREPO}" ] && echo "  GitHub monorepo : ${APM_GITHUB_MONOREPO}"
-        echo "  GitHub branch   : ${APM_GITHUB_BRANCH}"
-    else
-        echo "  GitHub sync     : disabled"
-    fi
+    echo "  Agents GitHub   : ${APM_GITHUB_MODE:-disabled} / ${APM_GITHUB_OWNER:-<none>}"
+    [ -n "${APM_GITHUB_MONOREPO}" ] && echo "  Agents repo     : ${APM_GITHUB_MONOREPO}"
+    echo "  Agents branch   : ${APM_GITHUB_BRANCH}"
+    echo "  Skills GitHub   : ${APM_SKILLS_GITHUB_MODE:-disabled} / ${APM_SKILLS_GITHUB_OWNER:-<none>}"
+    [ -n "${APM_SKILLS_GITHUB_MONOREPO}" ] && echo "  Skills repo     : ${APM_SKILLS_GITHUB_MONOREPO}"
+    echo "  Skills branch   : ${APM_SKILLS_GITHUB_BRANCH}"
     echo ""
 }
 
 cmd_validate() {
     local id="${1:-}"
+    _apm_require_agents_mode "validate"
 
     if [ -z "$APM_AGENTS_DB" ]; then
         apm_die 2 "No library path configured. Run: apm setup"
@@ -253,15 +293,19 @@ cmd_list() {
         fi
     fi
 
-    if [ -z "$APM_AGENTS_DB" ]; then
+    if [ -z "$APM_ACTIVE_DB" ]; then
         apm_die 2 "No library path configured. Run: apm setup"
     fi
 
     local out
-    out=$(_apm_py status-agents \
-        --db "$APM_AGENTS_DB" \
-        --platform "$APM_PLATFORM" \
-        --runtime-dir "$APM_RUNTIME_DIR")
+    if [ "${APM_MODE}" = "skills" ]; then
+        out=$(_apm_py status-skills --db "$APM_ACTIVE_DB" --platform "$APM_PLATFORM" --runtime-dir "$APM_RUNTIME_DIR")
+    else
+        out=$(_apm_py status-agents \
+            --db "$APM_ACTIVE_DB" \
+            --platform "$APM_PLATFORM" \
+            --runtime-dir "$APM_RUNTIME_DIR")
+    fi
     local exit_code=$?
 
     # Apply query and platform filter to the raw JSON (shared by both output modes)
@@ -309,11 +353,12 @@ print(json.dumps(data))
 
     # Human-readable output matching TUI.md §9
     echo ""
+    printf "  %-14s : %s\n" "Mode" "$APM_MODE"
     printf "  %-14s : %s\n" "Platform" "$APM_PLATFORM"
     printf "  %-14s : %s\n" "Scope" "$APM_SCOPE"
-    printf "  %-14s : %s\n" "Library" "$APM_AGENTS_DB"
-    printf "  %-14s : %s\n" "Runtime dir" "$APM_RUNTIME_DIR"
-    [ -n "$APM_GITHUB_MODE" ] && printf "  %-14s : %s\n" "GitHub mode" "$APM_GITHUB_MODE"
+    printf "  %-14s : %s\n" "Library" "$APM_ACTIVE_DB"
+    [ -n "$APM_RUNTIME_DIR" ] && printf "  %-14s : %s\n" "Runtime dir" "$APM_RUNTIME_DIR"
+    [ -n "$APM_ACTIVE_GITHUB_MODE" ] && printf "  %-14s : %s\n" "GitHub mode" "$APM_ACTIVE_GITHUB_MODE"
     [ -n "$query" ] && printf "  %-14s : %s\n" "Query" "$query"
     [ -n "$filter_platform" ] && printf "  %-14s : %s\n" "Platform filter" "$filter_platform"
     echo ""
@@ -324,27 +369,27 @@ agents = data.get('agents', [])
 
 if not agents:
     if query:
-        print(f\"  No agents found matching query: {query}\")
+        print(f\"  No ${APM_ACTIVE_KIND_PLURAL} found matching query: {query}\")
     else:
-        print(\"  (no agents found)\")
+        print(\"  (no entries found)\")
     sys.exit(0)
 
-# Sort order per TUI.md §9: collision, untracked, outdated, ready, orphan, in-sync, linked, no-deploy
+# Sort order per TUI.md §9: invalid/collision, unmanaged, outdated, ready, orphan, installed, linked, no-deploy
 ORDER = {
-    'collision': 0, 'unmanaged': 1, 'outdated': 2, 'linked-outdated': 3,
-    'ready': 4, 'orphan': 5, 'in-sync': 6, 'linked': 7, 'no-deploy': 8,
+    'invalid': 0, 'collision': 1, 'unmanaged': 2, 'outdated': 3,
+    'ready': 4, 'orphan': 5, 'installed': 6, 'linked': 7, 'no-deploy': 8,
 }
 agents.sort(key=lambda a: ORDER.get(a.get('state',{}).get('sync',''), 99))
 
 symbols = {
-    'in-sync':           '  ✓',
+    'installed':         '  ✓',
     'linked':            '  ⤷',
-    'linked-outdated':   '  ⤸',
     'outdated':          '  ~',
     'ready':             '  ○',
     'no-deploy':         '  -',
     'orphan':            '  ?',
-    'unmanaged': '  !',
+    'unmanaged':         '  !',
+    'invalid':           '  x',
     'collision':         '  x',
 }
 
@@ -359,12 +404,12 @@ C = {
     'reset':  '\033[0m'   if tty else '',
 }
 STATE_COLOR = {
-    'in-sync':           C['green'],
+    'installed':         C['green'],
     'linked':            C['green'],
-    'linked-outdated':   C['yellow'],
     'outdated':          C['yellow'],
     'ready':             C['cyan'],
-    'unmanaged': C['yellow'],
+    'unmanaged':         C['yellow'],
+    'invalid':           C['bold'] + C['red'],
     'orphan':            C['red'],
     'collision':         C['bold'] + C['red'],
     'no-deploy':         C['dim'],
@@ -399,25 +444,29 @@ cmd_find() {
     fi
 
     # Interactive mode
-    if [ -z "$APM_AGENTS_DB" ]; then
+    if [ -z "$APM_ACTIVE_DB" ]; then
         apm_die 2 "No library path configured. Run: apm setup"
     fi
 
     local _ids
-    _ids=$(_apm_py list-agents --db "$APM_AGENTS_DB" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(a['id']) for a in d['agents']]")
+    if [ "${APM_MODE}" = "skills" ]; then
+        _ids=$(_apm_py list-skills --db "$APM_ACTIVE_DB" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(a['id']) for a in d['skills']]")
+    else
+        _ids=$(_apm_py list-agents --db "$APM_ACTIVE_DB" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(a['id']) for a in d['agents']]")
+    fi
     
     if [ -z "$_ids" ]; then
-        echo "  No agents found in library."
+        echo "  No ${APM_ACTIVE_KIND_PLURAL} found in library."
         return 0
     fi
 
     local _selected=""
     if command -v fzf >/dev/null 2>&1; then
-        _selected=$(echo "$_ids" | fzf --header "Select an agent to view details" --height 40% --reverse)
+        _selected=$(echo "$_ids" | fzf --header "Select a ${APM_ACTIVE_KIND} to view details" --height 40% --reverse)
     else
         # Fallback to numbered menu
         echo ""
-        echo "  Select an agent:"
+        echo "  Select a ${APM_ACTIVE_KIND}:"
         local i=1
         local id_arr=()
         while IFS= read -r aid; do
@@ -435,11 +484,20 @@ cmd_find() {
     if [ -n "$_selected" ]; then
         echo ""
         echo "  --- Details for $_selected ---"
-        cmd_diff "$_selected"
+        if [ "${APM_MODE}" = "skills" ]; then
+            cmd_list "$_selected"
+        else
+            cmd_diff "$_selected"
+        fi
     fi
 }
 
 cmd_check() {
+    if [ "${APM_MODE}" = "skills" ]; then
+        cmd_status
+        return $?
+    fi
+
     if [ -z "$APM_AGENTS_DB" ]; then
         apm_die 2 "No library path configured. Run: apm setup"
     fi
@@ -459,7 +517,7 @@ data = json.load(sys.stdin)
 agents = [a for a in data.get('agents', []) if a.get('state',{}).get('sync') in ('outdated', 'unmanaged', 'orphan', 'ready')]
 
 if not agents:
-    print(\"  Everything is in-sync.\")
+    print(\"  Everything is installed or linked.\")
     sys.exit(0)
 
 # Sort
@@ -478,15 +536,19 @@ print(f\"  Summary: {len([a for a in agents if a.get('state',{}).get('sync')=='o
 }
 
 cmd_status() {
-    if [ -z "$APM_AGENTS_DB" ]; then
+    if [ -z "$APM_ACTIVE_DB" ]; then
         apm_die 2 "No library path configured. Run: apm setup"
     fi
 
     local out
-    out=$(_apm_py status-agents \
-        --db "$APM_AGENTS_DB" \
-        --platform "$APM_PLATFORM" \
-        --runtime-dir "$APM_RUNTIME_DIR")
+    if [ "${APM_MODE}" = "skills" ]; then
+        out=$(_apm_py status-skills --db "$APM_ACTIVE_DB" --platform "$APM_PLATFORM" --runtime-dir "$APM_RUNTIME_DIR")
+    else
+        out=$(_apm_py status-agents \
+            --db "$APM_ACTIVE_DB" \
+            --platform "$APM_PLATFORM" \
+            --runtime-dir "$APM_RUNTIME_DIR")
+    fi
     local exit_code=$?
 
     if [ "$APM_JSON_MODE" = "1" ]; then
@@ -496,9 +558,11 @@ cmd_status() {
 
     # Human-readable summary matching TUI.md §8
     echo ""
+    printf "  %-14s : %s\n" "Mode" "$APM_MODE"
     printf "  %-14s : %s\n" "Platform" "$APM_PLATFORM"
-    printf "  %-14s : %s\n" "Library" "$APM_AGENTS_DB"
-    [ -n "$APM_GITHUB_MODE" ] && printf "  %-14s : %s\n" "GitHub mode" "$APM_GITHUB_MODE"
+    printf "  %-14s : %s\n" "Library" "$APM_ACTIVE_DB"
+    [ -n "$APM_RUNTIME_DIR" ] && printf "  %-14s : %s\n" "Runtime dir" "$APM_RUNTIME_DIR"
+    [ -n "$APM_ACTIVE_GITHUB_MODE" ] && printf "  %-14s : %s\n" "GitHub mode" "$APM_ACTIVE_GITHUB_MODE"
     echo ""
     echo "$out" | python3 -c "
 import json, sys
@@ -506,7 +570,7 @@ from collections import Counter
 data = json.load(sys.stdin)
 agents = data.get('agents', [])
 counts = Counter(a.get('state',{}).get('sync','?') for a in agents)
-order = ['collision','unmanaged','outdated','linked-outdated','ready','orphan','in-sync','linked','no-deploy']
+order = ['invalid','collision','unmanaged','outdated','ready','orphan','installed','linked','no-deploy']
 
 tty = sys.stdout.isatty()
 C = {
@@ -519,12 +583,12 @@ C = {
     'reset':  '\033[0m'   if tty else '',
 }
 STATE_COLOR = {
-    'in-sync':           C['green'],
+    'installed':         C['green'],
     'linked':            C['green'],
-    'linked-outdated':   C['yellow'],
     'outdated':          C['yellow'],
     'ready':             C['cyan'],
-    'unmanaged': C['yellow'],
+    'unmanaged':         C['yellow'],
+    'invalid':           C['bold'] + C['red'],
     'orphan':            C['red'],
     'collision':         C['bold'] + C['red'],
     'no-deploy':         C['dim'],
@@ -539,12 +603,13 @@ for state in sorted(counts):
         print(f'  {state:<22}  {counts[state]}')
 "
     echo ""
-    echo "  Run 'apm list' for per-agent details."
+    echo "  Run 'apm list' for per-${APM_ACTIVE_KIND} details."
     echo ""
     return $exit_code
 }
 
 cmd_diff() {
+    _apm_require_agents_mode "diff"
     local id="${1:-}"
     if [ -z "$id" ]; then
         apm_die 2 "Usage: apm diff <id>"
@@ -590,7 +655,7 @@ if not data.get('runtime_exists', False):
     print()
     print(f\"  Next: run 'apm install {aid}' to install\")
 elif in_sync:
-    print(f'  {green}in-sync{reset}  — runtime matches library, all good')
+    print(f'  {green}installed{reset}  — runtime matches library, all good')
 else:
     all_fields = ['name', 'description', 'model', 'tools', 'body']
     for f in all_fields:
@@ -609,7 +674,7 @@ else:
             else:
                 print(f'  {f:<14} : changed')
         else:
-            print(f'  {f:<14} : in-sync')
+            print(f'  {f:<14} : current')
     print()
     print(f\"  Next: run 'apm install {aid}' to update runtime\")
 print()
@@ -619,7 +684,177 @@ print()
     return $?
 }
 
+_apm_skills_require_supported_platform() {
+    case "${APM_PLATFORM:-}" in
+        claude-code|codex|gemini|windsurf|agents-dir) ;;
+        *)
+            apm_die 2 "Skills install is not supported for platform: ${APM_PLATFORM}. Supported: claude-code, codex, gemini, windsurf, agents-dir"
+            ;;
+    esac
+}
+
+_apm_skill_status_json() {
+    _apm_py status-skills \
+        --db "$APM_SKILLS_DB" \
+        --platform "$APM_PLATFORM" \
+        --runtime-dir "$APM_RUNTIME_DIR"
+}
+
+_apm_skill_field_from_status() {
+    local id="$1"
+    local field="$2"
+    local status_json="$3"
+    echo "$status_json" | python3 -c "
+import json, sys
+skill_id = sys.argv[1]
+field = sys.argv[2]
+data = json.load(sys.stdin)
+for s in data.get('skills', []):
+    if s.get('id') == skill_id:
+        value = s
+        for part in field.split('.'):
+            value = (value or {}).get(part, '')
+        print(value if value is not None else '')
+        break
+" "$id" "$field" 2>/dev/null
+}
+
+cmd_install_skills() {
+    local id="${1:-}"
+
+    if [ -z "$APM_SKILLS_DB" ]; then
+        apm_die 2 "No skills library path configured. Run: apm setup"
+    fi
+    _apm_skills_require_supported_platform
+    if [ -z "$APM_RUNTIME_DIR" ]; then
+        apm_die 2 "No runtime directory configured for skills on platform: $APM_PLATFORM"
+    fi
+
+    if [ $# -gt 1 ] && [ "$id" != "--all" ]; then
+        local _ok=0 _fail=0
+        local _saved_json_mode="$APM_JSON_MODE"
+        for _sid in "$@"; do
+            [ "$APM_JSON_MODE" = "1" ] && APM_JSON_MODE=0
+            if cmd_install_skills "$_sid"; then
+                _ok=$((_ok + 1))
+            else
+                _fail=$((_fail + 1))
+            fi
+            APM_JSON_MODE="$_saved_json_mode"
+        done
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            python3 -c "import json; print(json.dumps({'command':'install','mode':'skills','installed':$_ok,'failed':$_fail}))"
+        fi
+        return $(( _fail > 0 ? 1 : 0 ))
+    fi
+
+    if [ "$id" = "--all" ]; then
+        local status_json targets count
+        status_json=$(_apm_skill_status_json)
+        targets=$(echo "$status_json" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for s in d.get('skills',[]):
+    if s.get('state',{}).get('sync') in ('ready','outdated'):
+        print(s['id'])
+" 2>/dev/null)
+        if [ -z "$targets" ]; then
+            echo ""
+            echo "  All skills are already linked or not deployable."
+            echo ""
+            return 0
+        fi
+        count=$(echo "$targets" | wc -l | tr -d ' ')
+        echo ""
+        echo "  Installing $count skill(s):"
+        echo "$targets" | while IFS= read -r sid; do echo "    $sid"; done
+        echo ""
+        if [ "$APM_DRY_RUN" = "1" ]; then
+            echo "  (dry run — nothing written)"
+            echo ""
+            return 0
+        fi
+        if [ "$APM_FORCE" != "1" ]; then
+            printf "  Proceed? [y/N] "
+            read -r _confirm
+            case "$_confirm" in
+                [yY]*) ;;
+                *) echo "  Cancelled."; echo ""; return 0 ;;
+            esac
+        fi
+        local installed=0 failed=0
+        while IFS= read -r sid; do
+            if cmd_install_skills "$sid"; then
+                installed=$((installed + 1))
+            else
+                failed=$((failed + 1))
+            fi
+        done <<< "$targets"
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            python3 -c "import json; print(json.dumps({'command':'install','mode':'skills','installed':$installed,'failed':$failed}))"
+        fi
+        return $(( failed > 0 ? 1 : 0 ))
+    fi
+
+    if [ -z "$id" ]; then
+        apm_die 2 "Usage: apm --mode skills install <id|--all>"
+    fi
+
+    local status_json skill_dir runtime_file sync_state
+    status_json=$(_apm_skill_status_json)
+    skill_dir=$(_apm_skill_field_from_status "$id" "paths.skill_dir" "$status_json")
+    runtime_file=$(_apm_skill_field_from_status "$id" "paths.runtime_file" "$status_json")
+    sync_state=$(_apm_skill_field_from_status "$id" "state.sync" "$status_json")
+
+    [ -z "$skill_dir" ] && apm_die 2 "Skill '$id' not found in library"
+    [ -z "$runtime_file" ] && apm_die 2 "Cannot resolve skill runtime path for '$id' on platform '$APM_PLATFORM'"
+    [ "$sync_state" = "no-deploy" ] && apm_die 2 "Skills are not deployable to platform '$APM_PLATFORM'"
+
+    if [ "$APM_JSON_MODE" != "1" ]; then
+        echo ""
+        printf "  %-10s : %s\n" "Installing" "$id"
+        printf "  %-10s : %s\n" "Platform" "$APM_PLATFORM"
+        printf "  %-10s : %s\n" "Source" "$skill_dir"
+        printf "  %-10s : %s\n" "Target" "$runtime_file"
+        echo ""
+    fi
+
+    if [ "$APM_DRY_RUN" = "1" ]; then
+        echo "  (dry run — nothing written)"
+        echo ""
+        return 0
+    fi
+
+    if [ -e "$runtime_file" ] || [ -L "$runtime_file" ]; then
+        if [ -L "$runtime_file" ]; then
+            :
+        else
+            apm_die 2 "Runtime path already exists and is not a symlink: $runtime_file"
+        fi
+    fi
+
+    apm_acquire_lock "runtime-${APM_PLATFORM}"
+    apm_ensure_dir "$APM_RUNTIME_DIR"
+    ln -sfn "$skill_dir" "$runtime_file" || {
+        apm_release_lock "runtime-${APM_PLATFORM}"
+        apm_die 2 "Failed to create skill symlink: $runtime_file"
+    }
+    apm_release_lock "runtime-${APM_PLATFORM}"
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        python3 -c "import json; print(json.dumps({'command':'install','mode':'skills','id':'$id','platform':'$APM_PLATFORM','runtime_file':'$runtime_file','source':'$skill_dir','success':True}))"
+    else
+        echo "  Linked."
+        echo ""
+    fi
+}
+
 cmd_install() {
+    if [ "${APM_MODE}" = "skills" ]; then
+        cmd_install_skills "$@"
+        return $?
+    fi
+
     local id="${1:-}"
 
     if [ -z "$APM_AGENTS_DB" ]; then
@@ -717,7 +952,7 @@ for a in d.get('agents',[]):
 " 2>/dev/null)
         if [ -z "$targets" ]; then
             echo ""
-            echo "  All agents are already in-sync or not deployable."
+            echo "  All agents are already current or not deployable."
             echo ""
             return 0
         fi
@@ -925,6 +1160,68 @@ print(json.dumps({'command':'install','id':'$id','platform':'$APM_PLATFORM','run
 }
 
 cmd_remove() {
+    if [ "${APM_MODE}" = "skills" ]; then
+        local skill_id="${1:-}"
+        if [ -z "$skill_id" ]; then
+            apm_die 2 "Usage: apm --mode skills remove <id>"
+        fi
+        if [ -z "$APM_SKILLS_DB" ]; then
+            apm_die 2 "No skills library path configured. Run: apm setup"
+        fi
+        _apm_skills_require_supported_platform
+        if [ -z "$APM_RUNTIME_DIR" ]; then
+            apm_die 2 "No runtime directory configured for skills on platform: $APM_PLATFORM"
+        fi
+
+        local skill_status runtime_file sync_state
+        skill_status=$(_apm_skill_status_json)
+        runtime_file=$(_apm_skill_field_from_status "$skill_id" "paths.runtime_file" "$skill_status")
+        sync_state=$(_apm_skill_field_from_status "$skill_id" "state.sync" "$skill_status")
+
+        [ -z "$runtime_file" ] && apm_die 2 "Skill '$skill_id' not found in library"
+        if [ "$sync_state" = "ready" ] || [ "$sync_state" = "no-deploy" ] || [ ! -L "$runtime_file" ]; then
+            apm_die 2 "No installed skill symlink found for '$skill_id' on platform '$APM_PLATFORM'"
+        fi
+
+        if [ "$APM_JSON_MODE" != "1" ]; then
+            echo ""
+            printf "  %-10s : %s\n" "Remove" "$skill_id"
+            printf "  %-10s : %s\n" "Platform" "$APM_PLATFORM"
+            printf "  %-10s : %s\n" "Target" "$runtime_file"
+            echo ""
+        fi
+
+        if [ "$APM_DRY_RUN" = "1" ]; then
+            echo "  (dry run — nothing removed)"
+            echo ""
+            return 0
+        fi
+
+        if [ "$APM_FORCE" != "1" ]; then
+            printf "  Proceed? [y/N] "
+            read -r _confirm
+            case "$_confirm" in
+                [yY]*) ;;
+                *) echo "  Cancelled."; echo ""; return 0 ;;
+            esac
+        fi
+
+        apm_acquire_lock "runtime-${APM_PLATFORM}"
+        rm "$runtime_file" || {
+            apm_release_lock "runtime-${APM_PLATFORM}"
+            apm_die 2 "Failed to remove: $runtime_file"
+        }
+        apm_release_lock "runtime-${APM_PLATFORM}"
+
+        if [ "$APM_JSON_MODE" = "1" ]; then
+            python3 -c "import json; print(json.dumps({'command':'remove','mode':'skills','id':'$skill_id','platform':'$APM_PLATFORM','runtime_file':'$runtime_file','success':True}))"
+        else
+            echo "  Removed."
+            echo ""
+        fi
+        return 0
+    fi
+
     local id="${1:-}"
     if [ -z "$id" ]; then
         apm_die 2 "Usage: apm remove <id>"
@@ -1152,7 +1449,7 @@ import json,sys
 d=json.load(sys.stdin)
 changed=d.get('changed_fields',[])
 if d.get('in_sync'):
-    print('    (in-sync — no changes)')
+    print('    (current — no changes)')
 elif not d.get('runtime_exists'):
     print('    (runtime not found for diff)')
 else:
@@ -1436,10 +1733,10 @@ _apm_github_check_prereqs() {
     if ! command -v git >/dev/null 2>&1; then
         apm_die 3 "git is required but not found"
     fi
-    if [ -z "$APM_GITHUB_OWNER" ]; then
+    if [ -z "$APM_ACTIVE_GITHUB_OWNER" ]; then
         apm_die 2 "GitHub owner not configured. Run: apm github connect"
     fi
-    if [ -z "$APM_GITHUB_MONOREPO" ] && [ "${APM_GITHUB_MODE:-monorepo}" = "monorepo" ]; then
+    if [ -z "$APM_ACTIVE_GITHUB_MONOREPO" ] && [ "${APM_ACTIVE_GITHUB_MODE:-monorepo}" = "monorepo" ]; then
         apm_die 2 "GitHub monorepo not configured. Run: apm github connect"
     fi
 }
@@ -1454,7 +1751,7 @@ _apm_github_check_prereqs() {
 #                    e.g. "git-mentor:/tmp/bare1 reviewer:/tmp/bare2"
 _apm_github_repo_url() {
     local agent_id="${1:-}"
-    local mode="${APM_GITHUB_MODE:-monorepo}"
+    local mode="${APM_ACTIVE_GITHUB_MODE:-monorepo}"
 
     # Test override
     if [ -n "${_APM_TEST_REMOTE_OVERRIDE:-}" ]; then
@@ -1479,14 +1776,14 @@ _apm_github_repo_url() {
         fi
         # Per-agent root frontmatter may override repo name via github.repo field
         local override=""
-        if [ -n "$APM_AGENTS_DB" ] && [ -f "${APM_AGENTS_DB}/${agent_id}/${agent_id}.md" ]; then
-            override=$(_apm_py parse-root "${APM_AGENTS_DB}/${agent_id}/${agent_id}.md" 2>/dev/null \
+        if [ "${APM_MODE}" = "agents" ] && [ -n "$APM_ACTIVE_DB" ] && [ -f "${APM_ACTIVE_DB}/${agent_id}/${agent_id}.md" ]; then
+            override=$(_apm_py parse-root "${APM_ACTIVE_DB}/${agent_id}/${agent_id}.md" 2>/dev/null \
                 | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('frontmatter',{}).get('github',{}).get('repo',''))" 2>/dev/null || true)
         fi
         local repo_name="${override:-${agent_id}}"
-        echo "https://github.com/${APM_GITHUB_OWNER}/${repo_name}.git"
+        echo "https://github.com/${APM_ACTIVE_GITHUB_OWNER}/${repo_name}.git"
     else
-        echo "https://github.com/${APM_GITHUB_OWNER}/${APM_GITHUB_MONOREPO}.git"
+        echo "https://github.com/${APM_ACTIVE_GITHUB_OWNER}/${APM_ACTIVE_GITHUB_MONOREPO}.git"
     fi
 }
 
@@ -1495,7 +1792,7 @@ _apm_github_repo_url() {
 # $1 = agent_id (required for per-agent mode to determine which repo to clone)
 _apm_github_clone_tmp() {
     local agent_id="${1:-}"
-    local branch="${APM_GITHUB_BRANCH:-main}"
+    local branch="${APM_ACTIVE_GITHUB_BRANCH:-main}"
     local repo_url
     repo_url=$(_apm_github_repo_url "$agent_id")
     local tmpdir
@@ -1514,7 +1811,7 @@ _apm_github_clone_tmp() {
 _apm_github_agent_dir() {
     local clone_dir="$1"
     local agent_id="$2"
-    local mode="${APM_GITHUB_MODE:-monorepo}"
+    local mode="${APM_ACTIVE_GITHUB_MODE:-monorepo}"
     if [ "$mode" = "per-agent" ]; then
         echo "$clone_dir"
     else
@@ -1558,23 +1855,23 @@ _apm_github_connect() {
 
     local _mode _owner _monorepo _branch
 
-    printf "  GitHub mode [monorepo/per-agent] (${APM_GITHUB_MODE:-monorepo}): "
+    printf "  GitHub mode [monorepo/per-agent] (${APM_ACTIVE_GITHUB_MODE:-monorepo}): "
     read -r _mode
-    _mode="${_mode:-${APM_GITHUB_MODE:-monorepo}}"
+    _mode="${_mode:-${APM_ACTIVE_GITHUB_MODE:-monorepo}}"
 
     printf "  GitHub owner or org: "
     read -r _owner
-    _owner="${_owner:-${APM_GITHUB_OWNER:-}}"
+    _owner="${_owner:-${APM_ACTIVE_GITHUB_OWNER:-}}"
 
     if [ "$_mode" = "monorepo" ]; then
-        printf "  Monorepo name [${APM_GITHUB_MONOREPO:-agents}]: "
+        printf "  Monorepo name [${APM_ACTIVE_GITHUB_MONOREPO:-${APM_MODE}}]: "
         read -r _monorepo
-        _monorepo="${_monorepo:-${APM_GITHUB_MONOREPO:-agents}}"
+        _monorepo="${_monorepo:-${APM_ACTIVE_GITHUB_MONOREPO:-${APM_MODE}}}"
     fi
 
-    printf "  Default branch [${APM_GITHUB_BRANCH:-main}]: "
+    printf "  Default branch [${APM_ACTIVE_GITHUB_BRANCH:-main}]: "
     read -r _branch
-    _branch="${_branch:-${APM_GITHUB_BRANCH:-main}}"
+    _branch="${_branch:-${APM_ACTIVE_GITHUB_BRANCH:-main}}"
 
     # Update config file, preserving existing lines and replacing GitHub vars
     local cfg="${APM_CONFIG_DIR:-${HOME}/.config/apm}/config.sh"
@@ -1583,15 +1880,16 @@ _apm_github_connect() {
         apm_die 2 "No config file found. Run: apm setup first"
     fi
 
-    # Write updated config: replace existing GITHUB_* lines or append them
+    # Write updated config: replace existing mode-specific GITHUB_* lines or append them
     local tmpfile="${cfg}.apm.tmp.$$"
-    # Remove existing GITHUB lines, then append new ones
-    grep -v '^GITHUB_' "$cfg" > "$tmpfile" || true
+    local prefix="GITHUB_"
+    [ "${APM_MODE}" = "skills" ] && prefix="SKILLS_GITHUB_"
+    grep -v "^${prefix}" "$cfg" > "$tmpfile" || true
     cat >> "$tmpfile" <<EOF
-GITHUB_MODE="${_mode}"
-GITHUB_OWNER="${_owner}"
-GITHUB_MONOREPO="${_monorepo:-}"
-GITHUB_BRANCH="${_branch}"
+${prefix}MODE="${_mode}"
+${prefix}OWNER="${_owner}"
+${prefix}MONOREPO="${_monorepo:-}"
+${prefix}BRANCH="${_branch}"
 EOF
     apm_write_atomic "$tmpfile" "$cfg" || {
         rm -f "$tmpfile"
@@ -1605,7 +1903,7 @@ EOF
     apm_ok "GitHub settings saved."
     printf "  %-12s : %s\n" "Mode"   "$_mode"
     printf "  %-12s : %s\n" "Owner"  "$_owner"
-    [ "$_mode" = "monorepo" ] && printf "  %-12s : %s\n" "Monorepo" "${_monorepo:-agents}"
+    [ "$_mode" = "monorepo" ] && printf "  %-12s : %s\n" "Monorepo" "${_monorepo:-${APM_MODE}}"
     printf "  %-12s : %s\n" "Branch" "$_branch"
     echo ""
 }
@@ -1615,19 +1913,20 @@ EOF
 # ---------------------------------------------------------------------------
 
 _apm_github_status() {
-    if [ -z "$APM_AGENTS_DB" ]; then
+    if [ -z "$APM_ACTIVE_DB" ]; then
         apm_die 2 "No library path configured. Run: apm setup"
     fi
 
     # If GitHub is not configured, show not-configured status
-    if [ -z "$APM_GITHUB_OWNER" ]; then
+    if [ -z "$APM_ACTIVE_GITHUB_OWNER" ]; then
         if [ "$APM_JSON_MODE" = "1" ]; then
-            echo "{\"github_configured\":false,\"agents\":[]}"
+            echo "{\"github_configured\":false,\"mode\":\"${APM_MODE}\",\"${APM_ACTIVE_KIND_PLURAL}\":[]}"
         else
             echo ""
             apm_header "GitHub Status"
             echo ""
-            printf "  %-14s : %s\n" "Mode"   "${APM_GITHUB_MODE:-not configured}"
+            printf "  %-14s : %s\n" "Entity" "${APM_MODE}"
+            printf "  %-14s : %s\n" "Mode"   "${APM_ACTIVE_GITHUB_MODE:-not configured}"
             printf "  %-14s : %s\n" "Owner"  "(not configured)"
             echo ""
             apm_warn "GitHub not configured. Run: apm github connect"
@@ -1638,20 +1937,21 @@ _apm_github_status() {
 
     _apm_github_check_prereqs
 
-    local mode="${APM_GITHUB_MODE:-monorepo}"
+    local mode="${APM_ACTIVE_GITHUB_MODE:-monorepo}"
 
     if [ "$APM_JSON_MODE" != "1" ]; then
         echo ""
         apm_header "GitHub Status"
         echo ""
+        printf "  %-14s : %s\n" "Entity" "$APM_MODE"
         printf "  %-14s : %s\n" "Mode"   "$mode"
-        printf "  %-14s : %s\n" "Owner"  "$APM_GITHUB_OWNER"
-        [ "$mode" = "monorepo" ] && printf "  %-14s : %s\n" "Repo" "$APM_GITHUB_MONOREPO"
-        printf "  %-14s : %s\n" "Branch" "${APM_GITHUB_BRANCH:-main}"
+        printf "  %-14s : %s\n" "Owner"  "$APM_ACTIVE_GITHUB_OWNER"
+        [ "$mode" = "monorepo" ] && printf "  %-14s : %s\n" "Repo" "$APM_ACTIVE_GITHUB_MONOREPO"
+        printf "  %-14s : %s\n" "Branch" "${APM_ACTIVE_GITHUB_BRANCH:-main}"
         echo ""
     fi
 
-    local symbols='{"in-sync":"  ✓","out-of-sync":"  ~","not-pushed":"  ○","not-cloned":"  ?"}'
+    local symbols='{"in-sync":"  ✓","outdated":"  ~","not-pushed":"  ○","not-cloned":"  ?"}'
 
     if [ "$mode" = "monorepo" ]; then
         apm_info "Cloning monorepo for status check..."
@@ -1660,7 +1960,8 @@ _apm_github_status() {
 
         local status_json
         status_json=$(_apm_py github-status \
-            --db "$APM_AGENTS_DB" \
+            --entity "$APM_MODE" \
+            --db "$APM_ACTIVE_DB" \
             --clone-dir "$clone_dir" \
             --github-mode "$mode")
         rm -rf "$clone_dir"
@@ -1671,7 +1972,7 @@ _apm_github_status() {
 import json, sys
 data = json.load(sys.stdin)
 agents = data.get('agents', [])
-symbols = {'in-sync': '  ✓', 'out-of-sync': '  ~', 'not-pushed': '  ○', 'not-cloned': '  ?'}
+symbols = {'in-sync': '  ✓', 'outdated': '  ~', 'not-pushed': '  ○', 'not-cloned': '  ?'}
 tty = sys.stdout.isatty()
 C = {
     'green':  '\033[32m' if tty else '',
@@ -1682,7 +1983,7 @@ C = {
 }
 STATE_COLOR = {
     'in-sync':    C['green'],
-    'out-of-sync': C['yellow'],
+    'outdated':   C['yellow'],
     'not-pushed': C['cyan'],
     'not-cloned': C['dim'],
 }
@@ -1698,7 +1999,7 @@ for a in agents:
         local agent_ids=()
         while IFS= read -r line; do
             agent_ids+=("$line")
-        done < <(ls -1 "$APM_AGENTS_DB" | grep -v '^[_.]')
+        done < <(ls -1 "$APM_ACTIVE_DB" | grep -v '^[_.]')
 
         local _pa_results=()
         for agent_id in "${agent_ids[@]}"; do
@@ -1707,15 +2008,16 @@ for a in agents:
             clone_dir=$(mktemp -d)
             local repo_url
             repo_url=$(_apm_github_repo_url "$agent_id")
-            if git clone --depth 1 --branch "${APM_GITHUB_BRANCH:-main}" \
+            if git clone --depth 1 --branch "${APM_ACTIVE_GITHUB_BRANCH:-main}" \
                     "$repo_url" "$clone_dir" 2>/dev/null; then
                 gh_agent_dir=$(_apm_github_agent_dir "$clone_dir" "$agent_id")
                 diff_json=$(_apm_py github-diff \
+                    --entity "$APM_MODE" \
                     --id "$agent_id" \
-                    --db "$APM_AGENTS_DB" \
+                    --db "$APM_ACTIVE_DB" \
                     --github-dir "$gh_agent_dir" 2>/dev/null)
                 gh_state=$(echo "$diff_json" | python3 -c \
-                    "import json,sys; print('in-sync' if json.load(sys.stdin).get('in_sync') else 'out-of-sync')" 2>/dev/null)
+                    "import json,sys; print('in-sync' if json.load(sys.stdin).get('in_sync') else 'outdated')" 2>/dev/null)
             else
                 gh_state="not-pushed"
             fi
@@ -1727,7 +2029,7 @@ for a in agents:
                 local sym
                 case "$gh_state" in
                     in-sync)     sym="  ✓" ;;
-                    out-of-sync) sym="  ~" ;;
+                    outdated)    sym="  ~" ;;
                     not-pushed)  sym="  ○" ;;
                     *)           sym="  ?" ;;
                 esac
@@ -1738,7 +2040,7 @@ for a in agents:
         if [ "$APM_JSON_MODE" = "1" ]; then
             local _pa_json
             _pa_json=$(IFS=,; echo "${_pa_results[*]+"${_pa_results[*]}"}")
-            echo "{\"github_configured\":true,\"mode\":\"per-agent\",\"owner\":\"$APM_GITHUB_OWNER\",\"branch\":\"${APM_GITHUB_BRANCH:-main}\",\"agents\":[$_pa_json]}"
+            echo "{\"github_configured\":true,\"mode\":\"per-agent\",\"entity\":\"${APM_MODE}\",\"owner\":\"$APM_ACTIVE_GITHUB_OWNER\",\"branch\":\"${APM_ACTIVE_GITHUB_BRANCH:-main}\",\"${APM_ACTIVE_KIND_PLURAL}\":[$_pa_json]}"
         fi
     fi
     echo ""
@@ -1753,16 +2055,16 @@ _apm_github_diff() {
     if [ -z "$id" ]; then
         apm_die 2 "Usage: apm github diff <id>"
     fi
-    if [ -z "$APM_AGENTS_DB" ]; then
+    if [ -z "$APM_ACTIVE_DB" ]; then
         apm_die 2 "No library path configured. Run: apm setup"
     fi
 
     _apm_github_check_prereqs
 
     echo ""
-    printf "  %-10s : %s\n" "Agent"  "$id"
+    printf "  %-10s : %s\n" "$(_apm_title_case_active_kind)"  "$id"
     printf "  %-10s : %s\n" "Repo"   "$(_apm_github_repo_url "$id")"
-    printf "  %-10s : %s\n" "Branch" "${APM_GITHUB_BRANCH:-main}"
+    printf "  %-10s : %s\n" "Branch" "${APM_ACTIVE_GITHUB_BRANCH:-main}"
     echo ""
 
     apm_info "Cloning for diff..."
@@ -1775,8 +2077,9 @@ _apm_github_diff() {
 
     local diff_json
     diff_json=$(_apm_py github-diff \
+        --entity "$APM_MODE" \
         --id "$id" \
-        --db "$APM_AGENTS_DB" \
+        --db "$APM_ACTIVE_DB" \
         --github-dir "$gh_agent_dir")
     local diff_exit=$?
 
@@ -1791,7 +2094,7 @@ _apm_github_diff() {
 import json, sys
 d = json.load(sys.stdin)
 if d.get('in_sync'):
-    print('  (in-sync — no differences)')
+    print('  (current — no differences)')
 else:
     changed = d.get('changed_files', [])
     missing_gh = d.get('missing_in_github', [])
@@ -1819,7 +2122,7 @@ _apm_github_push() {
     if [ -z "$id" ] && [ "$push_all" = "0" ]; then
         apm_die 2 "Usage: apm github push <id|--all>"
     fi
-    if [ -z "$APM_AGENTS_DB" ]; then
+    if [ -z "$APM_ACTIVE_DB" ]; then
         apm_die 2 "No library path configured. Run: apm setup"
     fi
 
@@ -1837,14 +2140,14 @@ _apm_github_push() {
     echo ""
     apm_header "GitHub Push"
 
-    local branch="${APM_GITHUB_BRANCH:-main}"
-    local mode="${APM_GITHUB_MODE:-monorepo}"
+    local branch="${APM_ACTIVE_GITHUB_BRANCH:-main}"
+    local mode="${APM_ACTIVE_GITHUB_MODE:-monorepo}"
     local push_ids=()
 
     if [ "$push_all" = "1" ]; then
         while IFS= read -r line; do
             push_ids+=("$line")
-        done < <(ls -1 "$APM_AGENTS_DB" | grep -v '^[_.]')
+        done < <(ls -1 "$APM_ACTIVE_DB" | grep -v '^[_.]')
     else
         push_ids=("$id")
     fi
@@ -1861,19 +2164,19 @@ _apm_github_push() {
         }
 
         for agent_id in "${push_ids[@]}"; do
-            local agent_dir="${APM_AGENTS_DB}/${agent_id}"
+            local agent_dir="${APM_ACTIVE_DB}/${agent_id}"
             if [ ! -d "$agent_dir" ]; then
                 apm_warn "Agent not found in library: $agent_id (skipping)"
                 skipped=$((skipped + 1)); continue
             fi
             local gh_agent_dir="${clone_dir}/${agent_id}"
             local diff_json already_in_sync
-            diff_json=$(_apm_py github-diff --id "$agent_id" --db "$APM_AGENTS_DB" \
+            diff_json=$(_apm_py github-diff --entity "$APM_MODE" --id "$agent_id" --db "$APM_ACTIVE_DB" \
                 --github-dir "$gh_agent_dir" 2>/dev/null)
             already_in_sync=$(echo "$diff_json" | python3 -c \
                 "import json,sys; print('true' if json.load(sys.stdin).get('in_sync') else 'false')" 2>/dev/null)
             if [ "$already_in_sync" = "true" ]; then
-                apm_info "  $agent_id: already in-sync"; skipped=$((skipped + 1)); continue
+                apm_info "  $agent_id: already current"; skipped=$((skipped + 1)); continue
             fi
             if [ "$APM_FORCE" != "1" ]; then
                 printf "  Push %s to GitHub? [y/N] " "$agent_id"
@@ -1915,12 +2218,12 @@ _apm_github_push() {
         fi
         rm -rf "$clone_dir"
         apm_release_lock "github"
-        apm_ok "Pushed $pushed agent(s) to ${APM_GITHUB_OWNER}/${APM_GITHUB_MONOREPO}:${branch}"
+        apm_ok "Pushed $pushed ${APM_ACTIVE_KIND}(s) to ${APM_ACTIVE_GITHUB_OWNER}/${APM_ACTIVE_GITHUB_MONOREPO}:${branch}"
 
     else
         # ---- per-agent: one clone per agent, content at repo root ----
         for agent_id in "${push_ids[@]}"; do
-            local agent_dir="${APM_AGENTS_DB}/${agent_id}"
+            local agent_dir="${APM_ACTIVE_DB}/${agent_id}"
             if [ ! -d "$agent_dir" ]; then
                 apm_warn "Agent not found in library: $agent_id (skipping)"
                 skipped=$((skipped + 1)); continue
@@ -1936,12 +2239,12 @@ _apm_github_push() {
             local gh_agent_dir
             gh_agent_dir=$(_apm_github_agent_dir "$clone_dir" "$agent_id")
             local diff_json already_in_sync
-            diff_json=$(_apm_py github-diff --id "$agent_id" --db "$APM_AGENTS_DB" \
+            diff_json=$(_apm_py github-diff --entity "$APM_MODE" --id "$agent_id" --db "$APM_ACTIVE_DB" \
                 --github-dir "$gh_agent_dir" 2>/dev/null)
             already_in_sync=$(echo "$diff_json" | python3 -c \
                 "import json,sys; print('true' if json.load(sys.stdin).get('in_sync') else 'false')" 2>/dev/null)
             if [ "$already_in_sync" = "true" ]; then
-                apm_info "  $agent_id: already in-sync"
+                apm_info "  $agent_id: already current"
                 rm -rf "$clone_dir"; skipped=$((skipped + 1)); continue
             fi
 
@@ -1978,13 +2281,13 @@ _apm_github_push() {
             ) > /dev/null 2>&1 || _commit_rc=$?
 
             if [ "$_commit_rc" -ne 0 ]; then
-                apm_info "  $agent_id: already in-sync (nothing to commit)"
+                apm_info "  $agent_id: already current (nothing to commit)"
                 rm -rf "$clone_dir"; skipped=$((skipped + 1)); continue
             fi
 
             if (cd "$clone_dir" && git push origin "$branch" 2>/dev/null); then
                 pushed=$((pushed + 1))
-                apm_ok "  Pushed: $agent_id → ${APM_GITHUB_OWNER}/${agent_id}:${branch}"
+                apm_ok "  Pushed: $agent_id → ${APM_ACTIVE_GITHUB_OWNER}/${agent_id}:${branch}"
             else
                 apm_warn "  Push failed for $agent_id — remote may have advanced"
                 skipped=$((skipped + 1))
@@ -2011,13 +2314,13 @@ _apm_github_pull() {
     if [ -z "$id" ] && [ "$pull_all" = "0" ]; then
         apm_die 2 "Usage: apm github pull <id|--all>"
     fi
-    if [ -z "$APM_AGENTS_DB" ]; then
+    if [ -z "$APM_ACTIVE_DB" ]; then
         apm_die 2 "No library path configured. Run: apm setup"
     fi
 
     _apm_github_check_prereqs
 
-    local mode="${APM_GITHUB_MODE:-monorepo}"
+    local mode="${APM_ACTIVE_GITHUB_MODE:-monorepo}"
     local timestamp
     timestamp=$(date -u +%Y-%m-%d-%H%M)
 
@@ -2057,7 +2360,7 @@ _apm_github_pull() {
             # For per-agent --all: iterate library IDs (we own those repos)
             while IFS= read -r line; do
                 pull_ids+=("$line")
-            done < <(ls -1 "$APM_AGENTS_DB" | grep -v '^[_.]')
+            done < <(ls -1 "$APM_ACTIVE_DB" | grep -v '^[_.]')
         else
             pull_ids=("$id")
         fi
@@ -2068,7 +2371,7 @@ _apm_github_pull() {
             clone_dir=$(mktemp -d)
             local repo_url
             repo_url=$(_apm_github_repo_url "$agent_id")
-            if ! git clone --depth 1 --branch "${APM_GITHUB_BRANCH:-main}" \
+            if ! git clone --depth 1 --branch "${APM_ACTIVE_GITHUB_BRANCH:-main}" \
                     "$repo_url" "$clone_dir" 2>/dev/null; then
                 apm_warn "  Failed to clone repo for $agent_id (skipping)"
                 rm -rf "$clone_dir"
@@ -2105,19 +2408,20 @@ _apm_pull_one_agent() {
 
     local diff_json already_in_sync
     diff_json=$(_apm_py github-diff \
+        --entity "$APM_MODE" \
         --id "$agent_id" \
-        --db "$APM_AGENTS_DB" \
+        --db "$APM_ACTIVE_DB" \
         --github-dir "$gh_agent_dir" 2>/dev/null)
     already_in_sync=$(echo "$diff_json" | python3 -c \
         "import json,sys; print('true' if json.load(sys.stdin).get('in_sync') else 'false')" 2>/dev/null)
 
     if [ "$already_in_sync" = "true" ]; then
-        apm_info "  $agent_id: already in-sync" >&2
+        apm_info "  $agent_id: already current" >&2
         echo "skipped"
         return
     fi
 
-    local stage_dir="${APM_AGENTS_DB}/_staging/github/${agent_id}-${timestamp}"
+    local stage_dir="${APM_ACTIVE_DB}/_staging/github/${agent_id}-${timestamp}"
     apm_ensure_dir "$stage_dir"
     cp -r "${gh_agent_dir}/." "${stage_dir}/" || {
         apm_die 2 "Failed to stage $agent_id from GitHub clone"
@@ -2144,18 +2448,18 @@ for f in d.get('changed_files', []):     print('    changed         : ' + f)
     fi
 
     local lib_exists=0
-    [ -d "${APM_AGENTS_DB}/${agent_id}" ] && lib_exists=1
+    [ -d "${APM_ACTIVE_DB}/${agent_id}" ] && lib_exists=1
 
     if [ "$APM_FORCE" = "1" ]; then
         _apply_github_stage "$stage_dir" "$agent_id" "$lib_exists" >&2
-        apm_ok "  Applied: ${APM_AGENTS_DB}/${agent_id}/" >&2
+        apm_ok "  Applied: ${APM_ACTIVE_DB}/${agent_id}/" >&2
     else
         printf "  Apply staged content to library? [y/N] " >&2
         read -r _confirm
         case "$_confirm" in
             [yY]*)
                 _apply_github_stage "$stage_dir" "$agent_id" "$lib_exists" >&2
-                apm_ok "  Applied: ${APM_AGENTS_DB}/${agent_id}/" >&2
+                apm_ok "  Applied: ${APM_ACTIVE_DB}/${agent_id}/" >&2
                 ;;
             *)
                 echo "  Staged at: $stage_dir (not applied)" >&2
@@ -2172,7 +2476,7 @@ _apply_github_stage() {
     local agent_id="$2"
     local lib_exists="${3:-0}"
 
-    local agent_dir="${APM_AGENTS_DB}/${agent_id}"
+    local agent_dir="${APM_ACTIVE_DB}/${agent_id}"
 
     apm_acquire_lock "library"
 
@@ -2652,9 +2956,9 @@ for a in d.get('agents',[]):
         if [ -z "$state" ]; then
             apm_die 2 "Agent '$id' not found in library"
         fi
-        if [ "$state" = "in-sync" ]; then
+        if [ "$state" = "installed" ] || [ "$state" = "linked" ]; then
             echo ""
-            echo "  $id is already in-sync."
+            echo "  $id is already current."
             echo ""
             return 0
         fi
@@ -2671,10 +2975,10 @@ for a in d.get('agents',[]):
 
     if [ -z "$targets" ]; then
         if [ "$APM_JSON_MODE" = "1" ]; then
-            echo '{"command":"update","updated":0,"failed":0,"status":"in-sync"}'
+            echo '{"command":"update","updated":0,"failed":0,"status":"current"}'
         else
             echo ""
-            echo "  All installed agents are in-sync."
+            echo "  All installed agents are current."
             echo ""
         fi
         return 0
@@ -2735,31 +3039,51 @@ for a in d.get('agents',[]):
 # ---------------------------------------------------------------------------
 
 _apm_interactive_dashboard() {
-    apm_header "apm  (platform: ${APM_PLATFORM} | scope: ${APM_SCOPE})"
+    if [ "${APM_MODE}" = "skills" ]; then
+        apm_header "apm  (mode: skills)"
+    else
+        apm_header "apm  (mode: agents | platform: ${APM_PLATFORM} | scope: ${APM_SCOPE})"
+    fi
 
     local out
-    out=$(_apm_py status-agents \
-        --db "$APM_AGENTS_DB" \
-        --platform "$APM_PLATFORM" \
-        --runtime-dir "$APM_RUNTIME_DIR" 2>/dev/null) || {
-        apm_warn "Could not load agent status"
-        return 1
-    }
+    if [ "${APM_MODE}" = "skills" ]; then
+        out=$(_apm_py status-skills --db "$APM_ACTIVE_DB" --platform "$APM_PLATFORM" --runtime-dir "$APM_RUNTIME_DIR" 2>/dev/null) || {
+            apm_warn "Could not load skill status"
+            return 1
+        }
+    else
+        out=$(_apm_py status-agents \
+            --db "$APM_ACTIVE_DB" \
+            --platform "$APM_PLATFORM" \
+            --runtime-dir "$APM_RUNTIME_DIR" 2>/dev/null) || {
+            apm_warn "Could not load agent status"
+            return 1
+        }
+    fi
 
     echo "$out" | python3 -c "
-import json, sys, os
+import json, sys
 data = json.load(sys.stdin)
 agents = data.get('agents', [])
 rdir = \"$APM_RUNTIME_DIR\"
 scope = \"$APM_SCOPE\"
+mode = \"$APM_MODE\"
 
 ready = [a for a in agents if a.get('state',{}).get('sync') in ('ready','outdated')]
 untracked = [a for a in agents if a.get('state',{}).get('sync') == 'unmanaged']
-collisions = [a for a in agents if a.get('state',{}).get('sync') == 'collision']
-in_sync = [a for a in agents if a.get('state',{}).get('sync') == 'in-sync']
+collisions = [a for a in agents if a.get('state',{}).get('sync') in ('collision', 'invalid')]
+current = [a for a in agents if a.get('state',{}).get('sync') in ('installed', 'linked')]
 
-print(f'  Agents: {len(agents)} total, {len(in_sync)} in-sync, {len(ready)} actionable, {len(untracked)} untracked')
-print(f'  Runtime: {rdir} ({scope})')
+label = 'Skills' if mode == 'skills' else 'Agents'
+untracked_label = 'Untracked runtime agents' if mode == 'agents' else 'Untracked entries'
+empty_hint = '  Try: github status' if mode == 'skills' else '  Try: import'
+
+print(f'  Tabs: [1] Agents  [2] Skills   Current: {mode}')
+print(f'  {label}: {len(agents)} total, {len(current)} current, {len(ready)} actionable, {len(untracked)} untracked')
+if mode == 'agents':
+    print(f'  Runtime: {rdir} ({scope})')
+else:
+    print(f'  Library: ${APM_ACTIVE_DB}')
 print()
 
 if ready:
@@ -2770,26 +3094,588 @@ if ready:
     print()
 
 if untracked:
-    print('  Untracked runtime agents:')
+    print(f'  {untracked_label}:')
     for a in untracked:
         print(f'    !  {a[\"id\"]}')
     print()
 
 if collisions:
-    print('  Collisions (run apm validate):')
+    print('  Collisions:')
     for a in collisions:
         print(f'    x  {a[\"id\"]}')
     print()
 
 if not agents:
-    print('  (no agents in library)')
+    print(f'  (no {label.lower()} in library)')
     print()
-    print('  Try: import')
+    print(empty_hint)
 "
 }
 
+_apm_interactive_active_tab() {
+    echo "${APM_INTERACTIVE_TAB:-${APM_MODE:-agents}}"
+}
+
+_apm_interactive_set_tab() {
+    local tab="$1"
+    APM_INTERACTIVE_TAB="$tab"
+    case "$tab" in
+        agents|skills)
+            APM_MODE="$tab"
+            _apm_resolve_runtime_and_scope
+            apm_resolve_active_mode
+            export APM_MODE APM_RUNTIME_DIR APM_SCOPE APM_ACTIVE_DB \
+                   APM_ACTIVE_GITHUB_MODE APM_ACTIVE_GITHUB_OWNER \
+                   APM_ACTIVE_GITHUB_MONOREPO APM_ACTIVE_GITHUB_BRANCH \
+                   APM_ACTIVE_KIND APM_ACTIVE_KIND_PLURAL
+            ;;
+    esac
+}
+
+_apm_interactive_init_view_state() {
+    : "${APM_INTERACTIVE_SHOW_ALL:=0}"
+    : "${APM_INTERACTIVE_SHOW_NO_DEPLOY:=1}"
+    : "${APM_INTERACTIVE_FILTER:=}"
+    : "${APM_INTERACTIVE_LIMIT:=12}"
+    : "${APM_INTERACTIVE_SELECTED_AGENT_ID:=}"
+    : "${APM_INTERACTIVE_SELECTED_SKILL_ID:=}"
+    : "${APM_INTERACTIVE_VISIBLE_AGENT_IDS:=}"
+    : "${APM_INTERACTIVE_VISIBLE_SKILL_IDS:=}"
+    : "${APM_INTERACTIVE_MESSAGE:=}"
+    export APM_INTERACTIVE_SHOW_ALL APM_INTERACTIVE_SHOW_NO_DEPLOY \
+           APM_INTERACTIVE_FILTER APM_INTERACTIVE_LIMIT \
+           APM_INTERACTIVE_SELECTED_AGENT_ID APM_INTERACTIVE_SELECTED_SKILL_ID \
+           APM_INTERACTIVE_VISIBLE_AGENT_IDS APM_INTERACTIVE_VISIBLE_SKILL_IDS \
+           APM_INTERACTIVE_MESSAGE
+}
+
+_apm_interactive_get_selected_id() {
+    case "${1:-$(_apm_interactive_active_tab)}" in
+        skills) echo "${APM_INTERACTIVE_SELECTED_SKILL_ID:-}" ;;
+        *)      echo "${APM_INTERACTIVE_SELECTED_AGENT_ID:-}" ;;
+    esac
+}
+
+_apm_interactive_set_selected_id() {
+    local tab="${1:-$(_apm_interactive_active_tab)}"
+    local value="${2:-}"
+    case "$tab" in
+        skills) APM_INTERACTIVE_SELECTED_SKILL_ID="$value"; export APM_INTERACTIVE_SELECTED_SKILL_ID ;;
+        *)      APM_INTERACTIVE_SELECTED_AGENT_ID="$value"; export APM_INTERACTIVE_SELECTED_AGENT_ID ;;
+    esac
+}
+
+_apm_interactive_get_visible_ids() {
+    case "${1:-$(_apm_interactive_active_tab)}" in
+        skills) echo "${APM_INTERACTIVE_VISIBLE_SKILL_IDS:-}" ;;
+        *)      echo "${APM_INTERACTIVE_VISIBLE_AGENT_IDS:-}" ;;
+    esac
+}
+
+_apm_interactive_set_visible_ids() {
+    local tab="${1:-$(_apm_interactive_active_tab)}"
+    local value="${2:-}"
+    case "$tab" in
+        skills) APM_INTERACTIVE_VISIBLE_SKILL_IDS="$value"; export APM_INTERACTIVE_VISIBLE_SKILL_IDS ;;
+        *)      APM_INTERACTIVE_VISIBLE_AGENT_IDS="$value"; export APM_INTERACTIVE_VISIBLE_AGENT_IDS ;;
+    esac
+}
+
+_apm_interactive_note() {
+    APM_INTERACTIVE_MESSAGE="${1:-}"
+    export APM_INTERACTIVE_MESSAGE
+}
+
+_apm_interactive_move_selection() {
+    local delta="$1"
+    local tab current ids idx current_idx new_idx
+    local -a arr=()
+
+    tab="$(_apm_interactive_active_tab)"
+    ids="$(_apm_interactive_get_visible_ids "$tab")"
+    [ -z "$ids" ] && return 0
+
+    IFS='|' read -r -a arr <<< "$ids"
+    [ "${#arr[@]}" -eq 0 ] && return 0
+
+    current="$(_apm_interactive_get_selected_id "$tab")"
+    current_idx=0
+    for idx in "${!arr[@]}"; do
+        if [ "${arr[$idx]}" = "$current" ]; then
+            current_idx=$idx
+            break
+        fi
+    done
+
+    new_idx=$((current_idx + delta))
+    [ "$new_idx" -lt 0 ] && new_idx=0
+    [ "$new_idx" -ge "${#arr[@]}" ] && new_idx=$((${#arr[@]} - 1))
+    _apm_interactive_set_selected_id "$tab" "${arr[$new_idx]}"
+}
+
+_apm_interactive_pause() {
+    printf "\nPress any key to return..."
+    read -rsn1 _ || true
+}
+
+_apm_interactive_run_selected_action() {
+    local action="$1"
+    local tab id ec=0
+
+    tab="$(_apm_interactive_active_tab)"
+    id="$(_apm_interactive_get_selected_id "$tab")"
+
+    if [ -z "$id" ]; then
+        _apm_interactive_note "No ${tab%?} selected"
+        return 0
+    fi
+
+    case "$tab:$action" in
+        agents:inspect)
+            cmd_list "$id"
+            ec=$?
+            _apm_interactive_pause
+            ;;
+        agents:install)
+            cmd_install "$id"
+            ec=$?
+            ;;
+        agents:update)
+            cmd_update "$id"
+            ec=$?
+            ;;
+        agents:remove)
+            cmd_remove "$id"
+            ec=$?
+            ;;
+        agents:diff)
+            cmd_diff "$id"
+            ec=$?
+            _apm_interactive_pause
+            ;;
+        agents:link)
+            cmd_link "$id"
+            ec=$?
+            ;;
+        agents:unlink)
+            cmd_unlink "$id"
+            ec=$?
+            ;;
+        agents:github-diff)
+            cmd_github diff "$id"
+            ec=$?
+            _apm_interactive_pause
+            ;;
+        agents:github-push)
+            cmd_github push "$id"
+            ec=$?
+            ;;
+        agents:github-pull)
+            cmd_github pull "$id"
+            ec=$?
+            ;;
+        *)
+            _apm_interactive_note "No direct action for ${tab}"
+            return 0
+            ;;
+    esac
+
+    if [ "$ec" -eq 0 ]; then
+        case "$action" in
+            inspect) _apm_interactive_note "Viewed ${id}" ;;
+            diff) _apm_interactive_note "Diff checked for ${id}" ;;
+            github-diff) _apm_interactive_note "GitHub diff checked for ${id}" ;;
+            github-push) _apm_interactive_note "Pushed ${id}" ;;
+            github-pull) _apm_interactive_note "Pulled ${id}" ;;
+            *) _apm_interactive_note "${action} completed for ${id}" ;;
+        esac
+    else
+        _apm_interactive_note "${action} failed for ${id}"
+    fi
+}
+
+_apm_interactive_next_tab() {
+    case "$(_apm_interactive_active_tab)" in
+        agents) _apm_interactive_set_tab "skills" ;;
+        skills) _apm_interactive_set_tab "settings" ;;
+        *)      _apm_interactive_set_tab "agents" ;;
+    esac
+}
+
+_apm_render_tab_strip() {
+    local active
+    active="$(_apm_interactive_active_tab)"
+    local agents_tab="${APM_TUI_DIM}[agents]${APM_TUI_RESET}"
+    local skills_tab="${APM_TUI_DIM}[skills]${APM_TUI_RESET}"
+    local settings_tab="${APM_TUI_DIM}[settings]${APM_TUI_RESET}"
+
+    [ "$active" = "agents" ] && agents_tab="${APM_TUI_REVERSE}${APM_TUI_BOLD} agents ${APM_TUI_RESET}"
+    [ "$active" = "skills" ] && skills_tab="${APM_TUI_REVERSE}${APM_TUI_BOLD} skills ${APM_TUI_RESET}"
+    [ "$active" = "settings" ] && settings_tab="${APM_TUI_REVERSE}${APM_TUI_BOLD} settings ${APM_TUI_RESET}"
+
+    printf "  %s %s %s\n" "$agents_tab" "$skills_tab" "$settings_tab"
+    printf "  %s\n" "${APM_TUI_DIM}────────────────────────────────────────────────────────────${APM_TUI_RESET}"
+    echo ""
+}
+
+_apm_interactive_render_entity_tab() {
+    local out
+    if [ "${APM_MODE}" = "skills" ]; then
+        out=$(_apm_py status-skills --db "$APM_ACTIVE_DB" --platform "$APM_PLATFORM" --runtime-dir "$APM_RUNTIME_DIR" 2>/dev/null) || {
+            apm_warn "Could not load skill status"
+            return 1
+        }
+    else
+        out=$(_apm_py status-agents \
+            --db "$APM_ACTIVE_DB" \
+            --platform "$APM_PLATFORM" \
+            --runtime-dir "$APM_RUNTIME_DIR" 2>/dev/null) || {
+            apm_warn "Could not load agent status"
+            return 1
+        }
+    fi
+
+    printf '%s\n' "$out" | python3 -c "
+import json, sys
+import os
+data = json.load(sys.stdin)
+items = data.get('agents') or data.get('skills') or []
+mode = '$APM_MODE'
+platform = '$APM_PLATFORM'
+scope = '$APM_SCOPE'
+db = '$APM_ACTIVE_DB'
+runtime = '$APM_RUNTIME_DIR'
+gh_mode = '$APM_ACTIVE_GITHUB_MODE'
+label = 'Agents' if mode == 'agents' else 'Skills'
+show_all = os.environ.get('APM_INTERACTIVE_SHOW_ALL', '0') == '1'
+show_no_deploy = os.environ.get('APM_INTERACTIVE_SHOW_NO_DEPLOY', '0') == '1'
+limit = int(os.environ.get('APM_INTERACTIVE_LIMIT', '12') or '12')
+query = os.environ.get('APM_INTERACTIVE_FILTER', '').strip().lower()
+
+C = {
+  'reset': os.environ.get('APM_TUI_RESET', ''),
+  'bold': os.environ.get('APM_TUI_BOLD', ''),
+  'dim': os.environ.get('APM_TUI_DIM', ''),
+  'green': os.environ.get('APM_TUI_GREEN', ''),
+  'yellow': os.environ.get('APM_TUI_YELLOW', ''),
+  'cyan': os.environ.get('APM_TUI_CYAN', ''),
+  'red': os.environ.get('APM_TUI_RED', ''),
+}
+
+order = {
+  'invalid': 0, 'collision': 1, 'unmanaged': 2, 'outdated': 3,
+  'ready': 4, 'orphan': 5, 'installed': 6, 'linked': 7,
+  'in-sync': 8, 'not-pushed': 9, 'no-deploy': 10
+}
+if mode == 'skills':
+  items.sort(key=lambda a: (
+    str((a.get('source') or {}).get('repo', '') or '').lower(),
+    str(a.get('id', '') or '').lower()
+  ))
+else:
+  items.sort(key=lambda a: (order.get(a.get('state',{}).get('sync',''), 99), a.get('id','')))
+
+if not show_no_deploy:
+  items = [a for a in items if a.get('state', {}).get('sync') != 'no-deploy']
+
+if query:
+  def matches(item):
+    fields = [
+      str(item.get('id', '') or ''),
+      str((item.get('root_meta') or {}).get('name', '') or ''),
+      str((item.get('root_meta') or {}).get('description', '') or ''),
+      str((item.get('deploy') or {}).get('name', '') or ''),
+      str((item.get('deploy') or {}).get('description', '') or ''),
+    ]
+    hay = ' '.join(fields).lower()
+    return query in hay
+  items = [a for a in items if matches(a)]
+
+current_states = {'installed', 'linked', 'in-sync'}
+current = sum(1 for a in items if a.get('state',{}).get('sync') in current_states)
+actionable = sum(1 for a in items if a.get('state',{}).get('sync') in ('ready', 'outdated', 'not-pushed'))
+invalid = sum(1 for a in items if a.get('state',{}).get('sync') in ('invalid', 'collision'))
+
+if not items:
+    print(f'  {label}')
+    print()
+    print(f'  {\"Mode\":<12} {mode}')
+    if mode == 'agents':
+        print(f'  {\"Platform\":<12} {platform}')
+        print(f'  {\"Scope\":<12} {scope}')
+        print(f'  {\"Runtime\":<12} {runtime}')
+    print(f'  {\"Library\":<12} {db}')
+    print(f'  {\"GitHub\":<12} {gh_mode or \"disabled\"}')
+    print(f'  {\"Filter\":<12} {query or \"none\"}')
+    print()
+    print(f'  {\"Summary\":<12} 0 total, 0 current, 0 actionable, 0 invalid')
+    print()
+    print('  (no entries)')
+    sys.exit(0)
+
+if show_all or len(items) <= limit:
+    visible = items
+else:
+    # In compact mode, make sure the first page exposes every present status
+    # before filling the remaining slots in the normal sorted order.
+    visible = []
+    used = set()
+    seen_states = set()
+
+    for idx, item in enumerate(items):
+        state = item.get('state', {}).get('sync', '?')
+        if state in seen_states:
+            continue
+        visible.append(item)
+        used.add(idx)
+        seen_states.add(state)
+        if len(visible) >= limit:
+            break
+
+    if len(visible) < limit:
+        for idx, item in enumerate(items):
+            if idx in used:
+                continue
+            visible.append(item)
+            if len(visible) >= limit:
+                break
+
+    # Restore the normal list ordering for the compact subset.
+    visible.sort(key=lambda a: (order.get(a.get('state', {}).get('sync', ''), 99), a.get('id', '')))
+
+hidden = max(0, len(items) - len(visible))
+
+STATE_COLOR = {
+  'installed': C['green'],
+  'linked': C['green'],
+  'in-sync': C['green'],
+  'outdated': C['yellow'],
+  'ready': C['cyan'],
+  'not-pushed': C['cyan'],
+  'unmanaged': C['yellow'],
+  'invalid': C['bold'] + C['red'],
+  'collision': C['bold'] + C['red'],
+  'orphan': C['red'],
+  'no-deploy': C['dim'],
+}
+
+print(f'  {label}')
+print()
+print(f'  {\"Mode\":<12} {mode}')
+if mode == 'agents':
+    print(f'  {\"Platform\":<12} {platform}')
+    print(f'  {\"Scope\":<12} {scope}')
+    print(f'  {\"Runtime\":<12} {runtime}')
+print(f'  {\"Library\":<12} {db}')
+print(f'  {\"GitHub\":<12} {gh_mode or \"disabled\"}')
+print(f'  {\"Filter\":<12} {query or \"none\"}')
+print()
+print(f'  {\"Summary\":<12} {len(items)} total, {current} current, {actionable} actionable, {invalid} invalid')
+print()
+
+def _skill_symbol(sync):
+    return {
+      'installed': '✓',
+      'linked': '↗',
+      'in-sync': '✓',
+      'outdated': '~',
+      'ready': '○',
+      'not-pushed': '○',
+      'unmanaged': '!',
+      'invalid': 'x',
+      'collision': 'x',
+      'orphan': '?',
+      'no-deploy': '-',
+    }.get(sync, '?')
+
+if mode == 'skills':
+    direct = [item for item in visible if not ((item.get('source') or {}).get('repo') or '').strip()]
+    grouped = {}
+    for item in visible:
+        repo = ((item.get('source') or {}).get('repo') or '').strip()
+        if not repo:
+            continue
+        grouped.setdefault(repo, []).append(item)
+
+    for item in direct:
+        sync = item.get('state', {}).get('sync', '?')
+        sym = _skill_symbol(sync)
+        color = STATE_COLOR.get(sync, '')
+        reset = C['reset'] if color else ''
+        print(f'  {color}{sym}  {item.get(\"id\", \"?\"):<28} {sync}{reset}')
+
+    for repo in sorted(grouped, key=lambda s: s.lower()):
+        print(f'  {C[\"dim\"]}○  {repo}/{C[\"reset\"]}')
+        for item in grouped[repo]:
+            sync = item.get('state', {}).get('sync', '?')
+            sym = _skill_symbol(sync)
+            color = STATE_COLOR.get(sync, '')
+            reset = C['reset'] if color else ''
+            print(f'  {color}   {sym}  {item.get(\"id\", \"?\"):<25} {sync}{reset}')
+else:
+    for item in visible:
+        sync = item.get('state', {}).get('sync', '?')
+        sym = _skill_symbol(sync)
+        color = STATE_COLOR.get(sync, '')
+        reset = C['reset'] if color else ''
+        print(f'  {color}{sym}  {item.get(\"id\", \"?\"):<28} {sync}{reset}')
+
+if hidden:
+    print()
+    print(f'  {C[\"dim\"]}... {hidden} more hidden. Press e to expand.{C[\"reset\"]}')
+" 2>/dev/null
+}
+
+_apm_interactive_render_settings_tab() {
+    echo "  Settings"
+    echo ""
+    echo "  "
+}
+
+_apm_interactive_render_screen() {
+    printf '\033[2J\033[H'
+    apm_tui_init
+    printf "  %sapm%s  %sinteractive%s\n" "$APM_TUI_BOLD" "$APM_TUI_RESET" "$APM_TUI_DIM" "$APM_TUI_RESET"
+    echo ""
+    _apm_render_tab_strip
+
+    case "$(_apm_interactive_active_tab)" in
+        agents|skills)
+            _apm_interactive_render_entity_tab
+            ;;
+        settings)
+            _apm_interactive_render_settings_tab
+            ;;
+    esac
+
+    echo ""
+    case "$(_apm_interactive_active_tab)" in
+        agents)
+            printf "  %sKeys%s  Tab cycle  1 agents  2 skills  S settings  e expand  d no-deploy  / filter  : commands  q quit\n" "$APM_TUI_DIM" "$APM_TUI_RESET"
+            ;;
+        skills)
+            printf "  %sKeys%s  Tab cycle  1 agents  2 skills  S settings  e expand  d no-deploy  / filter  : commands  q quit\n" "$APM_TUI_DIM" "$APM_TUI_RESET"
+            ;;
+        *)
+            printf "  %sKeys%s  Tab cycle  1 agents  2 skills  S settings  : commands  q quit\n" "$APM_TUI_DIM" "$APM_TUI_RESET"
+            ;;
+    esac
+    if [ -n "${APM_INTERACTIVE_MESSAGE:-}" ]; then
+        printf "  %s%s%s\n" "$APM_TUI_DIM" "$APM_INTERACTIVE_MESSAGE" "$APM_TUI_RESET"
+    fi
+    echo ""
+}
+
+_apm_interactive_exec_command() {
+    local _line="$1"
+    _line="${_line#"${_line%%[![:space:]]*}"}"
+    [ -z "$_line" ] && return 0
+
+    local _icmd _iargs
+    _icmd="${_line%% *}"
+    _iargs=""
+    [ "${_line}" != "${_icmd}" ] && _iargs="${_line#* }"
+
+    case "$_icmd" in
+        quit|exit|q)
+            echo ""
+            return 10 ;;
+        mode)
+            if [ "$_iargs" = "agents" ] || [ "$_iargs" = "skills" ]; then
+                _apm_interactive_set_tab "$_iargs"
+            elif [ "$_iargs" = "settings" ]; then
+                _apm_interactive_set_tab "settings"
+            else
+                echo "  Usage: mode <agents|skills|settings>"
+                sleep 1
+            fi ;;
+        list|ls)
+            cmd_list "$_iargs"
+            printf "\nPress any key to return..."
+            read -rsn1 _ ;;
+        find)
+            cmd_find "$_iargs"
+            printf "\nPress any key to return..."
+            read -rsn1 _ ;;
+        status)
+            cmd_status
+            printf "\nPress any key to return..."
+            read -rsn1 _ ;;
+        check)
+            cmd_check
+            printf "\nPress any key to return..."
+            read -rsn1 _ ;;
+        diff)
+            [ -z "$_iargs" ] && { echo "  Usage: diff <id>"; sleep 1; return 0; }
+            cmd_diff "$_iargs"
+            printf "\nPress any key to return..."
+            read -rsn1 _ ;;
+        install)
+            [ -z "$_iargs" ] && { echo "  Usage: install <id|--all|--cat <category>>"; sleep 1; return 0; }
+            # shellcheck disable=SC2086
+            cmd_install $_iargs ;;
+        remove|rm)
+            [ -z "$_iargs" ] && { echo "  Usage: remove <id>"; sleep 1; return 0; }
+            cmd_remove "$_iargs" ;;
+        update)
+            cmd_update "$_iargs" ;;
+        import)
+            # shellcheck disable=SC2086
+            cmd_import $_iargs ;;
+        link)
+            [ -z "$_iargs" ] && { echo "  Usage: link <id> [--as <alias>] [--project|--global]"; sleep 1; return 0; }
+            # shellcheck disable=SC2086
+            cmd_link $_iargs ;;
+        unlink)
+            [ -z "$_iargs" ] && { echo "  Usage: unlink <id> [--project|--global|--all]"; sleep 1; return 0; }
+            # shellcheck disable=SC2086
+            cmd_unlink $_iargs ;;
+        links)
+            cmd_links "$_iargs"
+            printf "\nPress any key to return..."
+            read -rsn1 _ ;;
+        validate)
+            cmd_validate "$_iargs"
+            printf "\nPress any key to return..."
+            read -rsn1 _ ;;
+        github)
+            # shellcheck disable=SC2086
+            cmd_github $_iargs
+            printf "\nPress any key to return..."
+            read -rsn1 _ ;;
+        config)
+            cmd_config
+            printf "\nPress any key to return..."
+            read -rsn1 _ ;;
+        setup)
+            cmd_setup
+            apm_load_config
+            apm_apply_cli_overrides
+            _apm_interactive_set_tab "${APM_MODE}" ;;
+        refresh|r)
+            ;;
+        help|h|\?)
+            echo ""
+            echo "  Tabs"
+            echo "  Tab cycles tabs, 1 opens agents, 2 opens skills, S opens settings."
+            echo ""
+            echo "  Commands"
+            echo "  Press : to enter a command line."
+            echo "  mode <agents|skills|settings>"
+            echo "  list  find  status  check  github <sub>  config  setup"
+            echo "  both modes: install remove"
+            echo "  agents-only: diff update import link unlink links validate"
+            printf "\nPress any key to return..."
+            read -rsn1 _ ;;
+        *)
+            echo "  Unknown command: $_icmd"
+            sleep 1 ;;
+    esac
+    return 0
+}
+
 cmd_interactive() {
-    if [ -z "$APM_AGENTS_DB" ]; then
+    if [ -z "$APM_ACTIVE_DB" ]; then
         if [ ! -f "${APM_CONFIG_DIR}/config.sh" ]; then
             echo ""
             echo "No config found at ${APM_CONFIG_DIR}/config.sh"
@@ -2809,119 +3695,90 @@ cmd_interactive() {
         return 0
     fi
 
-    _apm_interactive_dashboard
-    echo "  Shortcuts: [u]pdate  [i]mport  [l]ist  [s]tatus  [f]ind  [q]uit"
-    echo "  Commands : list  find  status  check  diff <id>  install <id> [id…]  install --all"
-    echo "             install --cat <name>  remove <id>  update [id]  import [id]  github <sub>"
-    echo "             setup  help  quit"
-    echo ""
+    _apm_interactive_set_tab "${APM_MODE}"
+    _apm_interactive_init_view_state
 
     while true; do
-        # Use -n 1 for single key, but only if we're at the root level.
-        # This is a bit complex in pure bash without a specialized loop.
-        # We'll stick to standard read for now but allow single-char commands.
-        printf "apm> "
-        read -r _line || break   # EOF (Ctrl-D) exits
-        _line="${_line#"${_line%%[![:space:]]*}"}"  # trim leading whitespace
-        [ -z "$_line" ] && continue
+        local _key
+        _apm_interactive_render_screen
+        IFS= read -rsn1 _key || break
 
-        # Parse the line into command + args
-        local _icmd _iargs
-        _icmd="${_line%% *}"
-        _iargs=""
-        [ "${_line}" != "${_icmd}" ] && _iargs="${_line#* }"
-
-        case "$_icmd" in
-            quit|exit|q)
+        case "$_key" in
+            $'\t')
+                _apm_interactive_next_tab ;;
+            1)
+                _apm_interactive_set_tab "agents" ;;
+            2)
+                _apm_interactive_set_tab "skills" ;;
+            S)
+                _apm_interactive_set_tab "settings" ;;
+            e)
+                if [ "${APM_INTERACTIVE_SHOW_ALL:-0}" = "1" ]; then
+                    APM_INTERACTIVE_SHOW_ALL=0
+                else
+                    APM_INTERACTIVE_SHOW_ALL=1
+                fi ;;
+            d)
+                if [ "${APM_INTERACTIVE_SHOW_NO_DEPLOY:-0}" = "1" ]; then
+                    APM_INTERACTIVE_SHOW_NO_DEPLOY=0
+                else
+                    APM_INTERACTIVE_SHOW_NO_DEPLOY=1
+                fi ;;
+            /)
+                printf "\nfilter> "
+                read -r APM_INTERACTIVE_FILTER || break
+                _apm_interactive_note "Filter updated"
+                ;;
+            :)
+                printf "\ncommand> "
+                local _line=""
+                read -r _line || break
+                _apm_interactive_exec_command "$_line"
+                [ $? -eq 10 ] && break ;;
+            q)
                 echo ""
                 break ;;
-            u)
-                echo "  Updating all agents..."
-                cmd_update
-                _apm_interactive_dashboard ;;
-            i)
-                cmd_import
-                _apm_interactive_dashboard ;;
-            l)
-                cmd_list
-                echo "" ;;
             s)
-                cmd_status ;;
-            f)
-                cmd_find
-                echo "" ;;
-            help|h|\?)
-                echo ""
-                echo "  list [query]       List all agents and their sync state (alias: ls)"
-                echo "  find <query>       Search for agents by keyword"
-                echo "  status             Show counts by state"
-                echo "  check              Show summary of actionable agents"
-                echo "  diff <id>          Diff library vs runtime for an agent"
-                echo "  install <id|--all|--cat <cat>>  Install agent(s) to runtime"
-                echo "  remove <id>        Remove agent from runtime (alias: rm)"
-                echo "  update [id]        Reinstall outdated agents (all or one)"
-                echo "  import [id|path]   Import runtime agent into library"
-                echo "  link <id>          Symlink agent split file into runtime dir"
-                echo "  unlink <id>        Remove symlink(s) for an agent"
-                echo "  links [id]         List tracked symlinks"
-                echo "  validate [id]      Validate agent(s)"
-                echo "  github <sub>       GitHub commands (connect/status/push/pull/diff)"
-                echo "  setup              Re-run setup wizard"
-                echo "  refresh            Redisplay dashboard"
-                echo "  quit               Exit interactive mode"
-                echo "" ;;
-            refresh|r)
-                _apm_interactive_dashboard ;;
-            list|ls)
-                cmd_list "$_iargs" ;;
-            find)
-                cmd_find "$_iargs" ;;
-            status)
-                cmd_status ;;
-            check)
-                cmd_check ;;
-            diff)
-                [ -z "$_iargs" ] && { echo "  Usage: diff <id>"; continue; }
-                cmd_diff "$_iargs" ;;
-            install)
-                [ -z "$_iargs" ] && { echo "  Usage: install <id|--all|--cat <category>>"; continue; }
-                # shellcheck disable=SC2086
-                cmd_install $_iargs ;;
-            remove|rm)
-                [ -z "$_iargs" ] && { echo "  Usage: remove <id>"; continue; }
-                cmd_remove "$_iargs" ;;
-            update)
-                cmd_update "$_iargs" ;;
-            import)
-                # word-split intentional: agent IDs/paths contain no spaces
-                # shellcheck disable=SC2086
-                cmd_import $_iargs ;;
-            link)
-                [ -z "$_iargs" ] && { echo "  Usage: link <id> [--as <alias>] [--project|--global]"; continue; }
-                # shellcheck disable=SC2086
-                cmd_link $_iargs ;;
-            unlink)
-                [ -z "$_iargs" ] && { echo "  Usage: unlink <id> [--project|--global|--all]"; continue; }
-                # shellcheck disable=SC2086
-                cmd_unlink $_iargs ;;
-            links)
-                cmd_links "$_iargs" ;;
-            validate)
-                cmd_validate "$_iargs" ;;
-            github)
-                # shellcheck disable=SC2086
-                cmd_github $_iargs ;;
-            setup)
-                cmd_setup
-                apm_load_config
-                apm_apply_cli_overrides ;;
-            *)
-                echo "  Unknown command: $_icmd (type 'help' for commands)" ;;
+                cmd_status
+                _apm_interactive_pause ;;
+            h|\?)
+                _apm_interactive_exec_command "help" ;;
         esac
     done
 
     echo "Bye."
     echo ""
+}
+
+cmd_tui() {
+    if [ -z "$APM_ACTIVE_DB" ]; then
+        if [ ! -f "${APM_CONFIG_DIR}/config.sh" ]; then
+            echo ""
+            echo "No config found at ${APM_CONFIG_DIR}/config.sh"
+            echo ""
+            cmd_setup
+            apm_load_config
+            apm_apply_cli_overrides
+        else
+            apm_die 2 "No library path configured. Run: apm setup"
+        fi
+    fi
+
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+        _apm_interactive_dashboard
+        return 0
+    fi
+
+    APM_TUI_MODE="${APM_MODE}" \
+    APM_TUI_DEFAULT_MODE="${APM_DEFAULT_MODE}" \
+    APM_TUI_AGENTS_DB="${APM_AGENTS_DB}" \
+    APM_TUI_SKILLS_DB="${APM_SKILLS_DB}" \
+    APM_TUI_PLATFORM="${APM_PLATFORM}" \
+    APM_TUI_SCOPE="${APM_SCOPE}" \
+    APM_TUI_RUNTIME_DIR="${APM_RUNTIME_DIR}" \
+    APM_TUI_AGENTS_GITHUB_MODE="${APM_GITHUB_MODE}" \
+    APM_TUI_SKILLS_GITHUB_MODE="${APM_SKILLS_GITHUB_MODE}" \
+    python3 "${APM_LIB_PY}/apm_tui.py" --helper "${APM_LIB_PY}/apm_python.py"
 }
 
 # ---------------------------------------------------------------------------
@@ -2948,6 +3805,7 @@ main() {
             cmd_setup
             ;;
         init)
+            _apm_require_agents_mode "init"
             cmd_init "${_REMAINING_ARGS[@]:1}"
             ;;
         config)
@@ -2978,22 +3836,30 @@ main() {
             cmd_remove "${_REMAINING_ARGS[1]:-}"
             ;;
         update)
+            _apm_require_agents_mode "update"
             cmd_update "${_REMAINING_ARGS[1]:-}"
             ;;
         import)
+            _apm_require_agents_mode "import"
             cmd_import "${_REMAINING_ARGS[@]:1}"
             ;;
         link)
+            _apm_require_agents_mode "link"
             cmd_link "${_REMAINING_ARGS[@]:1}"
             ;;
         unlink)
+            _apm_require_agents_mode "unlink"
             cmd_unlink "${_REMAINING_ARGS[@]:1}"
             ;;
         links)
+            _apm_require_agents_mode "links"
             cmd_links "${_REMAINING_ARGS[1]:-}"
             ;;
         github)
             cmd_github "${_REMAINING_ARGS[@]:1}"
+            ;;
+        tui)
+            cmd_tui
             ;;
         version|--version|-V)
             echo "apm $APM_VERSION"
@@ -3007,6 +3873,7 @@ Usage:
 
 Global flags:
   --db <path>        Override library database path
+  --mode <name>      Select mode (agents or skills)
   --platform <name>  Override platform (claude-code, cursor, codex, gemini, generic)
   --global, -g       Force global scope (ignore local .claude/ etc)
   --json             Machine-readable JSON output
@@ -3017,16 +3884,16 @@ Commands:
   setup                        Configure apm (interactive wizard)
   init [--platform <name>]     Initialize local project scope
   config                       Show resolved configuration
-  validate [id]                Validate agent(s) in the library
-  list [query] [--global|--project] [-a <platform>] List agents with sync state and category (alias: ls)
-  find [query]                 Search for agents by keyword
+  validate [id]                Validate agent(s) in the library (agents mode)
+  list [query] [--global|--project] [-a <platform>] List active mode entries with sync state (alias: ls)
+  find [query]                 Search the active mode library
   status                       Show counts by sync state
-  check                        Show summary of actionable agents
-  diff <id>                    Show diff between library and runtime
-  install <id> [id…]           Install one or more agents by ID
-  install --all                Install all ready/outdated agents
+  check                        Show summary of actionable entries
+  diff <id>                    Show diff between library and runtime (agents mode)
+  install <id> [id…]           Install one or more agents, or in skills mode create skill symlinks
+  install --all                Install all ready/outdated agents or skills
   install --cat <name>         Install all agents in a category
-  remove <id>                  Remove agent from runtime (alias: rm)
+  remove <id>                  Remove agent runtime file or skill symlink (alias: rm)
   update [id]                  Reinstall outdated agents (all if no id given)
   import                       Pick from unmanaged runtime agents (interactive)
   import [id]                  Import specific agent, or --all for everything
@@ -3034,13 +3901,18 @@ Commands:
   unlink <id> [--project|--global|--all]           Remove symlink(s) for an agent
   links [id]                   List tracked symlinks (all agents or one)
   github <sub>                 GitHub sync (connect, status, diff, push, pull)
+  tui                          Launch the experimental Python TUI
   version                      Show apm version
 
 Run with no command for interactive mode.
 HELP
             ;;
         "")
-            cmd_interactive
+            if [ "${APM_EXPERIMENTAL_TUI:-0}" = "1" ]; then
+                cmd_tui
+            else
+                cmd_interactive
+            fi
             ;;
         *)
             apm_die 2 "Unknown command: $cmd. Run 'apm --help' for usage."

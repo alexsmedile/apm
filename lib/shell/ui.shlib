@@ -1,6 +1,39 @@
 #!/usr/bin/env bash
 # ui.shlib — human output formatting helpers for apm
 
+apm_tui_enabled() {
+    [ "${APM_JSON_MODE:-0}" != "1" ] && [ -t 1 ]
+}
+
+apm_tui_init() {
+    if apm_tui_enabled; then
+        APM_TUI_RESET=$'\033[0m'
+        APM_TUI_BOLD=$'\033[1m'
+        APM_TUI_DIM=$'\033[2m'
+        APM_TUI_REVERSE=$'\033[7m'
+        APM_TUI_BLUE=$'\033[34m'
+        APM_TUI_CYAN=$'\033[36m'
+        APM_TUI_GREEN=$'\033[32m'
+        APM_TUI_YELLOW=$'\033[33m'
+        APM_TUI_RED=$'\033[31m'
+        APM_TUI_WHITE=$'\033[97m'
+    else
+        APM_TUI_RESET=""
+        APM_TUI_BOLD=""
+        APM_TUI_DIM=""
+        APM_TUI_REVERSE=""
+        APM_TUI_BLUE=""
+        APM_TUI_CYAN=""
+        APM_TUI_GREEN=""
+        APM_TUI_YELLOW=""
+        APM_TUI_RED=""
+        APM_TUI_WHITE=""
+    fi
+    export APM_TUI_RESET APM_TUI_BOLD APM_TUI_DIM APM_TUI_REVERSE \
+           APM_TUI_BLUE APM_TUI_CYAN APM_TUI_GREEN APM_TUI_YELLOW \
+           APM_TUI_RED APM_TUI_WHITE
+}
+
 apm_info() {
     if [ "${APM_JSON_MODE:-0}" != "1" ]; then
         echo "  $*"

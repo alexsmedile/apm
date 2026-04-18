@@ -72,6 +72,24 @@ EOF
 }
 run_test "config: --db CLI flag overrides AGENTS_DB env var" test_cli_flag_overrides_env
 
+test_skills_mode_uses_skills_db() {
+    local cfgdir skillsdb
+    cfgdir=$(mktemp -d)
+    skillsdb=$(mktemp -d)
+    cp -r "$FIXTURES/skills-basic/." "$skillsdb/"
+    cat > "${cfgdir}/config.sh" <<EOF
+SKILLS_DB="$skillsdb"
+DEFAULT_MODE="agents"
+EOF
+    local out
+    out=$(APM_CONFIG_DIR="$cfgdir" bash "$PROJECT_ROOT/apm" --mode skills --json list 2>/dev/null)
+    local count
+    count=$(echo "$out" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(len(d.get('skills',[])))" 2>/dev/null || echo "0")
+    rm -rf "$cfgdir" "$skillsdb"
+    [ "$count" = "2" ]
+}
+run_test "config: --mode skills selects SKILLS_DB" test_skills_mode_uses_skills_db
+
 test_platform_default_is_claude_code() {
     local cfgdir tmpdb
     cfgdir=$(mktemp -d)
@@ -101,9 +119,13 @@ test_setup_wizard_creates_config() {
     APM_CONFIG_DIR="$cfgdir" \
         bash "$PROJECT_ROOT/apm" setup <<'INPUT' > /dev/null 2>&1
 /tmp/test-agents-db
+/tmp/test-skills-db
+agents
 claude-code
 1
 n
+n
+y
 INPUT
     [ -f "${cfgdir}/config.sh" ]
     local result=$?
@@ -118,9 +140,13 @@ test_setup_wizard_writes_agents_db() {
     APM_CONFIG_DIR="$cfgdir" \
         bash "$PROJECT_ROOT/apm" setup <<'INPUT' > /dev/null 2>&1
 /tmp/test-agents-db
+/tmp/test-skills-db
+agents
 claude-code
 1
 n
+n
+y
 INPUT
     local content
     content=$(cat "${cfgdir}/config.sh" 2>/dev/null)
@@ -135,9 +161,13 @@ test_setup_wizard_writes_platform() {
     APM_CONFIG_DIR="$cfgdir" \
         bash "$PROJECT_ROOT/apm" setup <<'INPUT' > /dev/null 2>&1
 /tmp/test-db
+/tmp/test-skills-db
+agents
 cursor
 1
 n
+n
+y
 INPUT
     local content
     content=$(cat "${cfgdir}/config.sh" 2>/dev/null)
@@ -154,9 +184,13 @@ test_setup_wizard_atomic_write() {
     APM_CONFIG_DIR="$cfgdir" \
         bash "$PROJECT_ROOT/apm" setup <<'INPUT' > /dev/null 2>&1
 /tmp/test-db
+/tmp/test-skills-db
+agents
 claude-code
 1
 n
+n
+y
 INPUT
     # Source the config: if it's valid shell, this won't crash
     bash -c "source '${cfgdir}/config.sh'" 2>/dev/null
@@ -172,6 +206,8 @@ test_setup_wizard_with_github() {
     APM_CONFIG_DIR="$cfgdir" \
         bash "$PROJECT_ROOT/apm" setup <<'INPUT' > /dev/null 2>&1
 /tmp/test-db
+/tmp/test-skills-db
+agents
 claude-code
 1
 y
@@ -179,6 +215,8 @@ monorepo
 myorg
 my-agents
 main
+n
+y
 INPUT
     local content
     content=$(cat "${cfgdir}/config.sh" 2>/dev/null)

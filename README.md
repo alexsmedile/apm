@@ -86,27 +86,54 @@ apm import               # import unmanaged runtime agents into library
 
 ## Library layout
 
-Here's how to structure your library:
+`apm` supports different canonical layouts for agents and skills.
 
-```
-agents_library/
+Agents:
+
+```text
+agents_db/
   agent-mentor/
-    agent-mentor.md # root file (frontmatter with deploy config, body = instructions)
+    agent-mentor.md                  # required root file
+    instructions/                    # optional
+      agent-mentor@latest.md         # optional generic active body
+      agent-mentor.cc@latest.md      # optional platform-specific body
+    versions/                        # optional snapshots/backups/history
 ```
 
-If you need more control add:
+Agent rules:
+- The canonical ID is the folder name.
+- The required root file is `<id>/<id>.md`.
+- `instructions/` is optional and keeps the current body split out of the root file.
+- Body resolution order is `<id>.<platform-alias>@latest.md` → `<id>@latest.md` → `<id>_latest.md` (legacy) → root file body.
 
-```
-agents_library/
-  agent-mentor/
-    agent-mentor.md
-    instructions/                     # default deploy directory
-      agent-mentor@latest.md          # generic active body (optional)
-      agent-mentor.cc@latest.md       # claude-code-specific body (optional)
-    versions/                         # snapshots, backups and history
+Skills:
+
+Preferred monorepo-style layout:
+
+```text
+skills_db/
+  repo-name/
+    skills/
+      browser-use/
+        SKILL.md
+      shadcn/
+        SKILL.md
 ```
 
-Body resolution order: `<id>.<platform-alias>@latest.md` → `<id>@latest.md` → `<id>_latest.md` (legacy) → root file body. Most agents use the root file only.
+Fallback direct layout:
+
+```text
+skills_db/
+  browser-use/
+    SKILL.md
+  shadcn/
+    SKILL.md
+```
+
+Skill rules:
+- `apm` prefers `skills_db/<repo>/skills/<skill>/SKILL.md`.
+- If a top-level entry has no `skills/` folder, `apm` falls back to `skills_db/<skill>/SKILL.md`.
+- The canonical skill ID is the skill folder name that directly contains `SKILL.md`.
 
 Platform aliases: `claude-code→cc`, `cursor→crs`, `gemini→gmn`, `codex→cdx`, `generic→gen`
 
@@ -128,12 +155,41 @@ apm install --cat devtools
 
 `apm list` shows the category column when any agents have one set.
 
+## Install target folders
+
+Agents install targets:
+
+| Platform | Global target | Project target |
+|---|---|---|
+| `claude-code` | `~/.claude/agents/` | `.claude/agents/` |
+| `cursor` | `~/.cursor/agents/` | `.cursor/agents/` |
+| `codex` | `~/.codex/agents/` | `.codex/agents/` |
+| `gemini` | `~/.gemini/` | `.gemini/` |
+| `windsurf` | `~/.windsurf/rules/` | `.windsurf/rules/` |
+| `continue` | `~/.continue/rules/` | `.continue/rules/` |
+| `agents-dir` | `~/.agents/` | `.agents/` |
+| `generic` | `~/Desktop/agents-export/` | n/a |
+
+Skills install targets:
+
+| Platform | Global target | Project target | Behavior |
+|---|---|---|---|
+| `claude-code` | `~/.claude/skills/` | `.claude/skills/` | symlink skill dir |
+| `codex` | `~/.codex/skills/` | `.codex/skills/` | symlink skill dir |
+| `gemini` | `~/.gemini/skills/` | `.gemini/skills/` | symlink skill dir |
+| `windsurf` | `~/.codeium/windsurf/skills/` | `.windsurf/skills/` | symlink skill dir |
+| `agents-dir` | `~/.agents/skills/` | `.agents/skills/` | symlink skill dir |
+
+Skills are not installable for `cursor`, `continue`, or `generic` in the current implementation.
+
 ## Install modes and direct symlinks
 
 `apm` supports two different symlink-based workflows:
 
 - `install` with `INSTALL_MODE=symlink`:
   `apm` writes the generated runtime file into `~/.agents/` and symlinks the tool-specific runtime path back to that managed file. This keeps frontmatter like `apm.id`, `installed-at`, and deploy metadata intact.
+- `--mode skills install`:
+  `apm` creates a directory symlink from the selected platform skill target back to the canonical skill folder in `SKILLS_DB`.
 - `link` / `unlink`:
   `apm link <id>` creates a runtime symlink that points directly at the resolved split instruction body in your library. This is useful when you want runtime to follow the library body exactly without generating a runtime wrapper file.
 
@@ -142,6 +198,7 @@ Examples:
 ```bash
 apm install git-mentor                     # normal copy install
 INSTALL_MODE=symlink apm install git-mentor
+apm --mode skills --platform claude-code install browser-use
 apm link git-mentor
 apm link git-mentor --as review-helper
 apm links
@@ -176,13 +233,13 @@ apm github pull git-mentor   # pull one agent (staged by default)
 | `status` | Count summary by state |
 | `validate [id]` | Validate agent(s) in library |
 | `diff <id>` | Show library vs runtime diff |
-| `install <id> [id…]` | Install one or more agents by ID |
-| `install --all` | Install every ready/outdated agent |
+| `install <id> [id…]` | Install agents, or in `--mode skills` create skill symlinks |
+| `install --all` | Install every ready/outdated agent or skill |
 | `install --cat <name>` | Install all agents in a category |
 | `link <id>` | Symlink agent body directly into the runtime dir |
 | `unlink <id>` | Remove tracked symlink(s) for an agent |
 | `links [id]` | List tracked symlinks for one agent or all agents |
-| `remove <id>` | Remove agent from runtime |
+| `remove <id>` | Remove agent runtime file, or in `--mode skills` remove the skill symlink |
 | `update [id]` | Reinstall outdated agent(s) — omit for all |
 | `import` | Pick from unmanaged runtime agents (interactive) |
 | `import [id]` | Import specific agent, or `--all` for everything |
@@ -209,7 +266,7 @@ apm github pull git-mentor   # pull one agent (staged by default)
 | Symbol | State | Meaning |
 |--------|-------|---------|
 | `✓` | in-sync | Runtime matches library |
-| `⤷` | linked | Runtime is a direct symlink to the active library body |
+| `⤷` | linked | Runtime is a direct symlink to the active library body or skill dir |
 | `⤸` | linked-outdated | Runtime is a symlink, but points to the wrong target |
 | `~` | outdated | Runtime installed but behind library |
 | `○` | ready | In library, not yet installed |

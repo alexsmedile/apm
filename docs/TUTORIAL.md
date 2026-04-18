@@ -76,25 +76,54 @@ If you run `apm` with no config, it will guide you into setup automatically.
 
 ## 3. Understand the Database Layout
 
-Your local database is a folder with one subfolder per agent:
+`apm` supports one canonical layout for agents and two allowed layouts for skills.
+
+Agents:
 
 ```text
 agents_db/
   git-mentor/
-    git-mentor.md                  # root file: frontmatter + deploy config + body
-    instructions/                  # optional — only needed for platform-specific bodies
+    git-mentor.md                  # required root file
+    instructions/                  # optional — only needed for split or platform-specific bodies
       git-mentor@latest.md         # generic active body
       git-mentor.cc@latest.md      # claude-code-specific body (overrides generic)
-    versions/                      # backups/snapshots created by apm
+    versions/                      # optional backups/snapshots created by apm
 ```
 
 Key points:
-- `git-mentor/` — the folder name is the canonical agent ID
-- `git-mentor.md` — the root file doubles as database entry and deploy source; for most agents this is the only file you need
-- `instructions/` — optional; use when you need different instruction bodies per platform
-- `versions/` — apm writes backups here before destructive changes
+- `git-mentor/` is the canonical agent ID
+- `git-mentor.md` is required
+- `instructions/` is optional
+- `versions/` is optional
 
-This database is your source of truth.
+Skills, preferred layout:
+
+```text
+skills_db/
+  repo-name/
+    skills/
+      browser-use/
+        SKILL.md
+      shadcn/
+        SKILL.md
+```
+
+Skills, fallback layout:
+
+```text
+skills_db/
+  browser-use/
+    SKILL.md
+  shadcn/
+    SKILL.md
+```
+
+Key points:
+- `apm` prefers `skills_db/<repo>/skills/<skill>/SKILL.md`
+- if no `skills/` folder exists, it falls back to `skills_db/<skill>/SKILL.md`
+- the canonical skill ID is the skill folder name that directly contains `SKILL.md`
+
+These databases are your source of truth.
 
 ## 4. See What You Have
 
@@ -164,7 +193,29 @@ apm --dry-run install --all
 apm --dry-run install --cat devtools
 ```
 
-Installed files go to the platform runtime dir, e.g. `~/.claude/agents/` for claude-code.
+Agent install targets:
+
+| Platform | Global target | Project target |
+|---|---|---|
+| `claude-code` | `~/.claude/agents/` | `.claude/agents/` |
+| `cursor` | `~/.cursor/agents/` | `.cursor/agents/` |
+| `codex` | `~/.codex/agents/` | `.codex/agents/` |
+| `gemini` | `~/.gemini/` | `.gemini/` |
+| `windsurf` | `~/.windsurf/rules/` | `.windsurf/rules/` |
+| `continue` | `~/.continue/rules/` | `.continue/rules/` |
+| `agents-dir` | `~/.agents/` | `.agents/` |
+
+Skills install targets:
+
+| Platform | Global target | Project target | Behavior |
+|---|---|---|---|
+| `claude-code` | `~/.claude/skills/` | `.claude/skills/` | symlink skill dir |
+| `codex` | `~/.codex/skills/` | `.codex/skills/` | symlink skill dir |
+| `gemini` | `~/.gemini/skills/` | `.gemini/skills/` | symlink skill dir |
+| `windsurf` | `~/.codeium/windsurf/skills/` | `.windsurf/skills/` | symlink skill dir |
+| `agents-dir` | `~/.agents/skills/` | `.agents/skills/` | symlink skill dir |
+
+Skills are not installable for `cursor`, `continue`, or `generic`.
 
 ### Optional: use symlink mode for installs
 
@@ -175,6 +226,21 @@ INSTALL_MODE=symlink apm install git-mentor
 ```
 
 In this mode `apm` still generates a normal runtime file with frontmatter and `apm.id`; only the tool-specific runtime path becomes a symlink.
+
+### Skills install by symlink
+
+Skills install differently from agents. In skills mode, `install` creates a directory symlink from the selected platform target back to the canonical skill folder:
+
+```bash
+apm --mode skills --platform claude-code install browser-use
+apm --mode skills --platform claude-code install --all
+```
+
+Remove a linked skill with:
+
+```bash
+apm --mode skills --platform claude-code remove browser-use
+```
 
 ### Optional: link runtime directly to the library body
 
