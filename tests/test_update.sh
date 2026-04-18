@@ -27,10 +27,10 @@ run_test() {
 echo "=== Update + Interactive Tests ==="
 
 # ---------------------------------------------------------------------------
-# Helpers: build a tmpdb with one agent installed (in-sync) and one outdated
+# Helpers: build a tmpdb with one agent installed (current) and one outdated
 # ---------------------------------------------------------------------------
 
-# Sets up: tmpdb (library-basic), tmprt with all agents installed (in-sync).
+# Sets up: tmpdb (library-basic), tmprt with all agents installed (current).
 # Caller must rm -rf both dirs.
 _setup_insync() {
     local tmpdb tmprt
@@ -70,7 +70,7 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# update: nothing to update when all in-sync
+# update: nothing to update when all are current
 # ---------------------------------------------------------------------------
 
 test_update_all_in_sync() {
@@ -84,9 +84,9 @@ test_update_all_in_sync() {
         bash "$PROJECT_ROOT/apm" --platform claude-code --force update 2>/dev/null)
     local ec=$?
     rm -rf "$tmpdb" "$tmprt"
-    [ $ec -eq 0 ] && echo "$out" | grep -q "in-sync"
+    [ $ec -eq 0 ] && echo "$out" | grep -q "current"
 }
-run_test "update: reports all in-sync when nothing to update" test_update_all_in_sync
+run_test "update: reports all current when nothing to update" test_update_all_in_sync
 
 # ---------------------------------------------------------------------------
 # update: reinstalls outdated agent
@@ -143,7 +143,7 @@ test_update_single_agent() {
 run_test "update: single agent updated by id" test_update_single_agent
 
 # ---------------------------------------------------------------------------
-# update: single agent already in-sync exits 0 with message
+# update: single agent already current exits 0 with message
 # ---------------------------------------------------------------------------
 
 test_update_single_already_insync() {
@@ -157,9 +157,9 @@ test_update_single_already_insync() {
         bash "$PROJECT_ROOT/apm" --platform claude-code --force update git-mentor 2>/dev/null)
     local ec=$?
     rm -rf "$tmpdb" "$tmprt"
-    [ $ec -eq 0 ] && echo "$out" | grep -q "in-sync"
+    [ $ec -eq 0 ] && echo "$out" | grep -q "current"
 }
-run_test "update: single agent already in-sync exits 0" test_update_single_already_insync
+run_test "update: single agent already current exits 0" test_update_single_already_insync
 
 # ---------------------------------------------------------------------------
 # update: --dry-run writes nothing
@@ -315,9 +315,9 @@ test_install_all_nothing_to_do() {
         bash "$PROJECT_ROOT/apm" --platform claude-code --force install --all 2>/dev/null)
     local ec=$?
     rm -rf "$tmpdb" "$tmprt"
-    [ $ec -eq 0 ] && echo "$out" | grep -q "in-sync\|already"
+    [ $ec -eq 0 ] && echo "$out" | grep -q "current\|already"
 }
-run_test "install --all: reports nothing to do when all in-sync" test_install_all_nothing_to_do
+run_test "install --all: reports nothing to do when all are current" test_install_all_nothing_to_do
 
 test_install_multiple_ids() {
     local tmpdb tmprt

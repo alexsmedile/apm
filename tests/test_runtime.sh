@@ -187,7 +187,7 @@ test_diff_after_install_in_sync() {
     rm -rf "$tmprt"
     [ $diff_exit -eq 0 ]
 }
-run_test "diff: exits 0 when in-sync after install" test_diff_after_install_in_sync
+run_test "diff: exits 0 when installed after install" test_diff_after_install_in_sync
 
 test_diff_not_installed_exits_1() {
     local tmprt
@@ -266,6 +266,62 @@ test_remove_dry_run_keeps_file() {
 }
 run_test "remove: --dry-run keeps runtime file" test_remove_dry_run_keeps_file
 
+# --- skills runtime ---
+
+test_skill_install_creates_symlink() {
+    local tmphome
+    tmphome=$(mktemp -d)
+    HOME="$tmphome" \
+        SKILLS_DB="$(realpath "$FIXTURES/skills-basic")" \
+        bash "$PROJECT_ROOT/apm" --mode skills --platform claude-code install browser-use > /dev/null 2>&1
+    local result=$?
+    local target="$tmphome/.claude/skills/browser-use"
+    local ok=0
+    [ -L "$target" ] && [ "$(readlink "$target")" = "$(realpath "$FIXTURES/skills-basic/browser-use")" ] && ok=1
+    rm -rf "$tmphome"
+    [ $result -eq 0 ] && [ $ok -eq 1 ]
+}
+run_test "skills install: creates runtime symlink for supported platform" test_skill_install_creates_symlink
+
+test_skill_status_reports_linked() {
+    local tmphome out state
+    tmphome=$(mktemp -d)
+    HOME="$tmphome" \
+        SKILLS_DB="$(realpath "$FIXTURES/skills-basic")" \
+        bash "$PROJECT_ROOT/apm" --mode skills --platform claude-code install browser-use > /dev/null 2>&1
+    out=$(HOME="$tmphome" \
+        SKILLS_DB="$(realpath "$FIXTURES/skills-basic")" \
+        bash "$PROJECT_ROOT/apm" --mode skills --platform claude-code --json status 2>/dev/null)
+    state=$(echo "$out" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for s in d.get('skills', []):
+    if s.get('id') == 'browser-use':
+        print(s.get('state', {}).get('sync', ''))
+        break
+" 2>/dev/null)
+    rm -rf "$tmphome"
+    [ "$state" = "linked" ]
+}
+run_test "skills status: reports linked after install" test_skill_status_reports_linked
+
+test_skill_remove_deletes_symlink() {
+    local tmphome target
+    tmphome=$(mktemp -d)
+    target="$tmphome/.claude/skills/browser-use"
+    HOME="$tmphome" \
+        SKILLS_DB="$(realpath "$FIXTURES/skills-basic")" \
+        bash "$PROJECT_ROOT/apm" --mode skills --platform claude-code install browser-use > /dev/null 2>&1
+    HOME="$tmphome" \
+        SKILLS_DB="$(realpath "$FIXTURES/skills-basic")" \
+        bash "$PROJECT_ROOT/apm" --mode skills --platform claude-code --force remove browser-use > /dev/null 2>&1
+    local removed=0
+    [ ! -e "$target" ] && [ ! -L "$target" ] && removed=1
+    rm -rf "$tmphome"
+    [ $removed -eq 1 ]
+}
+run_test "skills remove: removes runtime symlink" test_skill_remove_deletes_symlink
+
 # --- state engine ---
 
 test_status_shows_in_sync() {
@@ -282,12 +338,12 @@ test_status_shows_in_sync() {
     in_sync_count=$(echo "$out" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-print(sum(1 for a in d.get('agents',[]) if a.get('state',{}).get('sync')=='in-sync'))
+print(sum(1 for a in d.get('agents',[]) if a.get('state',{}).get('sync')=='installed'))
 " 2>/dev/null)
     rm -rf "$tmprt"
     [ "$in_sync_count" = "1" ]
 }
-run_test "status: shows in-sync after install" test_status_shows_in_sync
+run_test "status: shows installed after install" test_status_shows_in_sync
 
 test_status_symlink_install_mode_not_linked_outdated() {
     local tmprt tmpagents out state
@@ -312,9 +368,9 @@ for a in d.get('agents', []):
         break
 " 2>/dev/null)
     rm -rf "$tmprt" "$tmpagents"
-    [ "$state" = "in-sync" ]
+    [ "$state" = "installed" ]
 }
-run_test "status: symlink install mode remains in-sync" test_status_symlink_install_mode_not_linked_outdated
+run_test "status: symlink install mode remains installed" test_status_symlink_install_mode_not_linked_outdated
 
 test_status_direct_link_reports_linked_then_linked_outdated() {
     local tmprt tmpdb out state linked_path
@@ -353,9 +409,9 @@ for a in d.get('agents', []):
         break
 " 2>/dev/null)
     rm -rf "$tmprt" "$tmpdb"
-    [ "$state" = "linked-outdated" ]
+    [ "$state" = "outdated" ]
 }
-run_test "status: direct links report linked and linked-outdated correctly" test_status_direct_link_reports_linked_then_linked_outdated
+run_test "status: direct links report linked and outdated correctly" test_status_direct_link_reports_linked_then_linked_outdated
 
 test_alias_link_is_accounted_for_not_unmanaged() {
     local tmprt tmpdb out state unmanaged_count

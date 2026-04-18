@@ -45,6 +45,8 @@ PLATFORM_ALIASES = {
     'generic':     'gen',
 }
 
+SKILL_SUPPORTED_PLATFORMS = {'claude-code', 'codex', 'gemini', 'windsurf', 'agents-dir'}
+
 # ---------------------------------------------------------------------------
 # Frontmatter parsing
 # ---------------------------------------------------------------------------
@@ -198,6 +200,76 @@ def scan_library(db_path: str) -> list:
         if os.path.isfile(root_file):
             ids.append(entry)
     return ids
+
+
+def scan_skills(db_path: str) -> list:
+    """Return list of canonical skill IDs found in db_path."""
+    return [rec['id'] for rec in _scan_skill_records(db_path)]
+
+
+def _scan_skill_records(db_path: str) -> list[dict]:
+    """
+    Return skill records discovered in db_path.
+
+    Preferred layout:
+      <db>/<repo>/skills/<skill-id>/SKILL.md
+
+    Fallback layout:
+      <db>/<skill-id>/SKILL.md
+    """
+    if not os.path.isdir(db_path):
+        return []
+
+    records = []
+    for entry in sorted(os.listdir(db_path)):
+        full = os.path.join(db_path, entry)
+        if not os.path.isdir(full):
+            continue
+        if entry.startswith('_') or entry.startswith('.'):
+            continue
+        if entry in IGNORED_DIRS:
+            continue
+
+        repo_skills_dir = os.path.join(full, 'skills')
+        if os.path.isdir(repo_skills_dir):
+            for skill_entry in sorted(os.listdir(repo_skills_dir)):
+                skill_dir = os.path.join(repo_skills_dir, skill_entry)
+                if not os.path.isdir(skill_dir):
+                    continue
+                if skill_entry.startswith('_') or skill_entry.startswith('.'):
+                    continue
+                skill_file = os.path.join(skill_dir, 'SKILL.md')
+                if os.path.isfile(skill_file):
+                    records.append({
+                        'id': skill_entry,
+                        'skill_dir': skill_dir,
+                        'skill_file': skill_file,
+                        'source': 'repo-skills',
+                        'repo': entry,
+                    })
+            continue
+
+        skill_file = os.path.join(full, 'SKILL.md')
+        if os.path.isfile(skill_file):
+            records.append({
+                'id': entry,
+                'skill_dir': full,
+                'skill_file': skill_file,
+                'source': 'direct',
+                'repo': '',
+            })
+
+    return records
+
+
+def _skill_record_map(db_path: str) -> dict[str, dict]:
+    """Return {skill_id: skill_record} for discovered skills."""
+    return {rec['id']: rec for rec in _scan_skill_records(db_path)}
+
+
+def parse_skill_file(path: str) -> tuple[dict, str]:
+    """Read and parse a SKILL.md file. Returns (frontmatter, body)."""
+    return parse_agent_file(path)
 
 
 # ---------------------------------------------------------------------------
@@ -431,9 +503,9 @@ def _compute_sync_state(agent_id, agent_dir, root_file, deploy,
                 return 'linked'
             apm_id = ((runtime_meta or {}).get('apm', {}) or {}).get('id')
             if apm_id != agent_id:
-                return 'linked-outdated'
+                return 'outdated'
         except Exception:
-            return 'linked-outdated'
+            return 'outdated'
 
     # Runtime exists — check if managed
     if runtime_meta is None:
@@ -466,7 +538,7 @@ def _compute_sync_state(agent_id, agent_dir, root_file, deploy,
             lib_deploy.get('model', '') != rt_model or
             lib_deploy.get('tools', []) != rt_tools):
             return 'outdated'
-        return 'in-sync'
+        return 'installed'
     except Exception:
         return 'outdated'
 
@@ -806,6 +878,117 @@ def status_agents(db_path: str, platform: str, runtime_dir: str) -> dict:
             })
 
     return {'agents': agents, 'platform': platform}
+
+
+def list_skills(db_path: str) -> dict:
+    """List all skill IDs in the library."""
+    db_path = os.path.expanduser(db_path)
+    records = _scan_skill_records(db_path)
+    skills = []
+    for rec in records:
+        sid = rec['id']
+        skill_file = rec['skill_file']
+        name = sid
+        description = ''
+        try:
+            fm, _ = parse_skill_file(skill_file)
+            name = fm.get('name', sid)
+            description = fm.get('description', '')
+        except Exception:
+            pass
+        skills.append({
+            'id': sid,
+            'name': name,
+            'description': description,
+            'source': {
+                'kind': rec.get('source', ''),
+                'repo': rec.get('repo', ''),
+            },
+        })
+    return {'skills': skills}
+
+
+def _collect_dir_files(base: str) -> dict:
+    """Return {relative_path: content} for all files under base."""
+    result = {}
+    if not os.path.isdir(base):
+        return result
+    for root, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in ('versions', '.git')]
+        for fname in files:
+            full = os.path.join(root, fname)
+            rel = os.path.relpath(full, base)
+            try:
+                with open(full) as f:
+                    result[rel] = f.read()
+            except Exception:
+                result[rel] = None
+    return result
+
+
+def status_skills(db_path: str, platform: str = '', runtime_dir: str = '') -> dict:
+    """List skills with full state for each."""
+    db_path = os.path.expanduser(db_path)
+    records = _scan_skill_records(db_path)
+    skills = []
+    runtime_dir_exp = os.path.expanduser(runtime_dir) if runtime_dir else ''
+    skill_platform_supported = (not platform) or (platform in SKILL_SUPPORTED_PLATFORMS)
+
+    for rec in records:
+        sid = rec['id']
+        skill_dir = rec['skill_dir']
+        skill_file = rec['skill_file']
+        root_meta = {}
+        try:
+            root_meta, _ = parse_skill_file(skill_file)
+        except Exception:
+            pass
+
+        runtime_path = os.path.join(runtime_dir_exp, sid) if runtime_dir_exp else ''
+        state = 'ready'
+        warnings = []
+        if not os.path.isfile(skill_file):
+            state = 'invalid'
+            warnings.append(f'Missing SKILL.md in {skill_dir}')
+        elif platform and not skill_platform_supported:
+            state = 'no-deploy'
+            warnings.append(f"Platform '{platform}' does not support skill installs")
+        elif runtime_path:
+            if os.path.islink(runtime_path):
+                if os.path.realpath(runtime_path) == os.path.realpath(skill_dir):
+                    state = 'linked'
+                else:
+                    state = 'outdated'
+                    warnings.append(f'Runtime link target differs from canonical skill dir: {runtime_path}')
+            elif os.path.lexists(runtime_path):
+                state = 'outdated'
+                warnings.append(f'Runtime path exists but is not a managed symlink: {runtime_path}')
+
+        skills.append({
+            'id': sid,
+            'paths': {
+                'skill_dir': skill_dir,
+                'root_file': skill_file,
+                'runtime_file': runtime_path,
+                'github_stage_dir': os.path.join(db_path, '_staging', 'github'),
+            },
+            'root_meta': root_meta,
+            'source': {
+                'kind': rec.get('source', ''),
+                'repo': rec.get('repo', ''),
+            },
+            'deploy': {'enabled': state != 'no-deploy', 'platform': platform},
+            'runtime_meta': None,
+            'github': {},
+            'state': {
+                'sync': state,
+                'github': 'not-configured',
+                'eligibility': 'enabled' if state != 'no-deploy' else 'disabled',
+            },
+            'warnings': warnings,
+        })
+
+    return {'agents': skills, 'skills': skills, 'mode': 'skills', 'platform': platform}
 
 
 # ---------------------------------------------------------------------------
@@ -1192,7 +1375,8 @@ def scan_unmanaged_runtime(runtime_dir: str, db_path: str,
 # GitHub diff helper
 # ---------------------------------------------------------------------------
 
-def github_diff_agent(agent_id: str, db_path: str, github_dir: str) -> dict:
+def github_diff_agent(agent_id: str, db_path: str, github_dir: str,
+                      entity: str = 'agents') -> dict:
     """
     Compare canonical library agent dir against github_dir (a clone subtree).
     github_dir: path to the agent folder inside the cloned repo
@@ -1211,28 +1395,12 @@ def github_diff_agent(agent_id: str, db_path: str, github_dir: str) -> dict:
       }
     """
     db_path = os.path.expanduser(db_path)
-    agent_dir = os.path.join(db_path, agent_id)
-
-    def _collect_files(base: str) -> dict:
-        """Return {relative_path: content} for all files under base."""
-        result = {}
-        if not os.path.isdir(base):
-            return result
-        for root, dirs, files in os.walk(base):
-            # Skip versions/ backup dirs and .git metadata
-            dirs[:] = [d for d in dirs if d not in ('versions', '.git')]
-            for fname in files:
-                full = os.path.join(root, fname)
-                rel = os.path.relpath(full, base)
-                try:
-                    with open(full) as f:
-                        result[rel] = f.read()
-                except Exception:
-                    result[rel] = None
-        return result
-
-    lib_files = _collect_files(agent_dir)
-    gh_files = _collect_files(github_dir)
+    if entity == 'agents':
+        entity_dir = os.path.join(db_path, agent_id)
+    else:
+        entity_dir = _skill_record_map(db_path).get(agent_id, {}).get('skill_dir', os.path.join(db_path, agent_id))
+    lib_files = _collect_dir_files(entity_dir)
+    gh_files = _collect_dir_files(github_dir)
 
     all_keys = set(lib_files) | set(gh_files)
     missing_in_github = []
@@ -1258,8 +1426,9 @@ def github_diff_agent(agent_id: str, db_path: str, github_dir: str) -> dict:
 
     return {
         'agent_id': agent_id,
-        'library_dir': agent_dir,
+        'library_dir': entity_dir,
         'github_dir': github_dir,
+        'entity': entity,
         'in_sync': in_sync,
         'missing_in_github': missing_in_github,
         'missing_in_library': missing_in_library,
@@ -1269,14 +1438,14 @@ def github_diff_agent(agent_id: str, db_path: str, github_dir: str) -> dict:
 
 
 def github_status_agents(db_path: str, github_clone_dir: str,
-                          github_mode: str) -> dict:
+                          github_mode: str, entity: str = 'agents') -> dict:
     """
     For each agent in the library, compute its GitHub sync state.
     github_clone_dir: root of the cloned monorepo.
     Returns per-agent status list.
     """
     db_path = os.path.expanduser(db_path)
-    agent_ids = scan_library(db_path)
+    agent_ids = scan_library(db_path) if entity == 'agents' else scan_skills(db_path)
     agents = []
 
     for agent_id in sorted(agent_ids):
@@ -1292,8 +1461,8 @@ def github_status_agents(db_path: str, github_clone_dir: str,
             state = 'not-pushed'
             diff = {}
         else:
-            diff = github_diff_agent(agent_id, db_path, gh_agent_dir)
-            state = 'in-sync' if diff['in_sync'] else 'out-of-sync'
+            diff = github_diff_agent(agent_id, db_path, gh_agent_dir, entity=entity)
+            state = 'in-sync' if diff['in_sync'] else 'outdated'
 
         agents.append({
             'id': agent_id,
@@ -1301,7 +1470,8 @@ def github_status_agents(db_path: str, github_clone_dir: str,
             'diff': diff,
         })
 
-    return {'agents': agents, 'github_mode': github_mode}
+    key = 'agents' if entity == 'agents' else 'skills'
+    return {'agents': agents, key: agents, 'github_mode': github_mode, 'entity': entity}
 
 
 # ---------------------------------------------------------------------------
@@ -1556,6 +1726,11 @@ def cmd_list_agents(args):
     print(_dump(result))
 
 
+def cmd_list_skills(args):
+    result = list_skills(args.db)
+    print(_dump(result))
+
+
 def cmd_list_categories(args):
     result = list_categories(args.db)
     print(_dump(result))
@@ -1570,11 +1745,21 @@ def cmd_status_agents(args):
     print(_dump(result))
 
 
+def cmd_status_skills(args):
+    result = status_skills(
+        db_path=args.db,
+        platform=getattr(args, 'platform', '') or '',
+        runtime_dir=getattr(args, 'runtime_dir', '') or '',
+    )
+    print(_dump(result))
+
+
 def cmd_github_diff(args):
     result = github_diff_agent(
         agent_id=args.id,
         db_path=args.db,
         github_dir=args.github_dir,
+        entity=getattr(args, 'entity', 'agents') or 'agents',
     )
     in_sync = result.get('in_sync', False)
     print(_dump(result))
@@ -1587,6 +1772,7 @@ def cmd_github_status(args):
         db_path=args.db,
         github_clone_dir=args.clone_dir,
         github_mode=args.github_mode,
+        entity=getattr(args, 'entity', 'agents') or 'agents',
     )
     print(_dump(result))
 
@@ -1638,6 +1824,10 @@ def main():
     p = subparsers.add_parser('list-agents')
     p.add_argument('--db', required=True)
 
+    # list-skills
+    p = subparsers.add_parser('list-skills')
+    p.add_argument('--db', required=True)
+
     # list-categories
     p = subparsers.add_parser('list-categories')
     p.add_argument('--db', required=True)
@@ -1646,6 +1836,12 @@ def main():
     p = subparsers.add_parser('status-agents')
     p.add_argument('--db', required=True)
     p.add_argument('--platform', required=True)
+    p.add_argument('--runtime-dir', default='')
+
+    # status-skills
+    p = subparsers.add_parser('status-skills')
+    p.add_argument('--db', required=True)
+    p.add_argument('--platform', default='')
     p.add_argument('--runtime-dir', default='')
 
     # generate-runtime
@@ -1700,12 +1896,14 @@ def main():
     p.add_argument('--id', required=True)
     p.add_argument('--db', required=True)
     p.add_argument('--github-dir', required=True)
+    p.add_argument('--entity', default='agents')
 
     # github-status: per-agent github sync state across library
     p = subparsers.add_parser('github-status')
     p.add_argument('--db', required=True)
     p.add_argument('--clone-dir', required=True)
     p.add_argument('--github-mode', default='monorepo')
+    p.add_argument('--entity', default='agents')
 
     args = parser.parse_args()
 
@@ -1721,8 +1919,10 @@ def main():
         'validate-all': cmd_validate_all,
         'diff-manifest': cmd_diff_manifest,
         'list-agents': cmd_list_agents,
+        'list-skills': cmd_list_skills,
         'list-categories': cmd_list_categories,
         'status-agents': cmd_status_agents,
+        'status-skills': cmd_status_skills,
         'generate-runtime': cmd_generate_runtime,
         'analyze-import': cmd_analyze_import,
         'build-import-draft': cmd_build_import_draft,

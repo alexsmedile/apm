@@ -9,8 +9,11 @@ export APM_CONFIG_DIR
 _APM_CONFIG_FILE="${APM_CONFIG_DIR}/config.sh"
 
 # Built-in defaults
+_APM_DEFAULT_MODE="agents"
 _APM_DEFAULT_PLATFORM="agents-dir"
 _APM_DEFAULT_INSTALL_MODE="copy"
+_APM_DEFAULT_AGENTS_DB="${HOME}/agents_db"
+_APM_DEFAULT_SKILLS_DB="${HOME}/skills_db"
 _APM_DEFAULT_CLAUDE_AGENTS="${HOME}/.claude/agents"
 _APM_DEFAULT_CURSOR_AGENTS="${HOME}/.cursor/agents"
 _APM_DEFAULT_CODEX_AGENTS="${HOME}/.codex/agents"
@@ -21,35 +24,93 @@ _APM_DEFAULT_AGENTS_DIR="${HOME}/.agents"
 _APM_DEFAULT_GENERIC_EXPORT="${HOME}/Desktop/agents-export"
 _APM_DEFAULT_GITHUB_BRANCH="main"
 
+_apm_platform_supports_skills() {
+    case "${1:-}" in
+        claude-code|codex|gemini|windsurf|agents-dir) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+apm_resolve_active_mode() {
+    case "${APM_MODE:-agents}" in
+        agents)
+            APM_ACTIVE_DB="${APM_AGENTS_DB:-}"
+            APM_ACTIVE_GITHUB_MODE="${APM_GITHUB_MODE:-}"
+            APM_ACTIVE_GITHUB_OWNER="${APM_GITHUB_OWNER:-}"
+            APM_ACTIVE_GITHUB_MONOREPO="${APM_GITHUB_MONOREPO:-}"
+            APM_ACTIVE_GITHUB_BRANCH="${APM_GITHUB_BRANCH:-${_APM_DEFAULT_GITHUB_BRANCH}}"
+            APM_ACTIVE_KIND="agent"
+            APM_ACTIVE_KIND_PLURAL="agents"
+            ;;
+        skills)
+            APM_ACTIVE_DB="${APM_SKILLS_DB:-}"
+            APM_ACTIVE_GITHUB_MODE="${APM_SKILLS_GITHUB_MODE:-}"
+            APM_ACTIVE_GITHUB_OWNER="${APM_SKILLS_GITHUB_OWNER:-}"
+            APM_ACTIVE_GITHUB_MONOREPO="${APM_SKILLS_GITHUB_MONOREPO:-}"
+            APM_ACTIVE_GITHUB_BRANCH="${APM_SKILLS_GITHUB_BRANCH:-${_APM_DEFAULT_GITHUB_BRANCH}}"
+            APM_ACTIVE_KIND="skill"
+            APM_ACTIVE_KIND_PLURAL="skills"
+            ;;
+        *)
+            apm_die 2 "Unknown mode: ${APM_MODE}. Use --mode agents|skills"
+            ;;
+    esac
+
+    export APM_ACTIVE_DB APM_ACTIVE_GITHUB_MODE APM_ACTIVE_GITHUB_OWNER \
+           APM_ACTIVE_GITHUB_MONOREPO APM_ACTIVE_GITHUB_BRANCH \
+           APM_ACTIVE_KIND APM_ACTIVE_KIND_PLURAL
+}
+
 # Resolve runtime directory and scope for the current platform.
 # Handles global vs project scope detection.
 _apm_resolve_runtime_and_scope() {
     # 1. Start with the "global" path for the selected platform
-    case "$APM_PLATFORM" in
-        claude-code) APM_RUNTIME_DIR="${APM_CLAUDE_AGENTS}" ;;
-        cursor)      APM_RUNTIME_DIR="${APM_CURSOR_AGENTS}" ;;
-        codex)       APM_RUNTIME_DIR="${APM_CODEX_AGENTS}" ;;
-        gemini)      APM_RUNTIME_DIR="${APM_GEMINI_MD}" ;;
-        windsurf)    APM_RUNTIME_DIR="${APM_WINDSURF_RULES}" ;;
-        continue)    APM_RUNTIME_DIR="${APM_CONTINUE_RULES}" ;;
-        agents-dir)  APM_RUNTIME_DIR="${APM_AGENTS_DIR}" ;;
-        generic)     APM_RUNTIME_DIR="${APM_GENERIC_EXPORT}" ;;
-        *)           APM_RUNTIME_DIR="" ;;
-    esac
+    if [ "${APM_MODE:-agents}" = "skills" ]; then
+        case "$APM_PLATFORM" in
+            claude-code) APM_RUNTIME_DIR="${HOME}/.claude/skills" ;;
+            codex)       APM_RUNTIME_DIR="${HOME}/.codex/skills" ;;
+            gemini)      APM_RUNTIME_DIR="${HOME}/.gemini/skills" ;;
+            windsurf)    APM_RUNTIME_DIR="${HOME}/.codeium/windsurf/skills" ;;
+            agents-dir)  APM_RUNTIME_DIR="${APM_AGENTS_DIR}/skills" ;;
+            *)           APM_RUNTIME_DIR="" ;;
+        esac
+    else
+        case "$APM_PLATFORM" in
+            claude-code) APM_RUNTIME_DIR="${APM_CLAUDE_AGENTS}" ;;
+            cursor)      APM_RUNTIME_DIR="${APM_CURSOR_AGENTS}" ;;
+            codex)       APM_RUNTIME_DIR="${APM_CODEX_AGENTS}" ;;
+            gemini)      APM_RUNTIME_DIR="${APM_GEMINI_MD}" ;;
+            windsurf)    APM_RUNTIME_DIR="${APM_WINDSURF_RULES}" ;;
+            continue)    APM_RUNTIME_DIR="${APM_CONTINUE_RULES}" ;;
+            agents-dir)  APM_RUNTIME_DIR="${APM_AGENTS_DIR}" ;;
+            generic)     APM_RUNTIME_DIR="${APM_GENERIC_EXPORT}" ;;
+            *)           APM_RUNTIME_DIR="" ;;
+        esac
+    fi
 
     # 2. Detect project scope if not forced global
     APM_SCOPE="global"
     if [ "${APM_GLOBAL_FORCE:-0}" != "1" ]; then
         local _local_dir=""
-        case "$APM_PLATFORM" in
-            claude-code) [ -d "./.claude/agents" ] && _local_dir="./.claude/agents" ;;
-            cursor)      [ -d "./.cursor/agents" ] && _local_dir="./.cursor/agents" ;;
-            codex)       [ -d "./.codex/agents" ]  && _local_dir="./.codex/agents" ;;
-            gemini)      [ -d "./.gemini" ]        && _local_dir="./.gemini" ;;
-            windsurf)    [ -d "./.windsurf/rules" ] && _local_dir="./.windsurf/rules" ;;
-            continue)    [ -d "./.continue/rules" ] && _local_dir="./.continue/rules" ;;
-            agents-dir)  [ -d "./.agents" ]        && _local_dir="./.agents" ;;
-        esac
+        if [ "${APM_MODE:-agents}" = "skills" ]; then
+            case "$APM_PLATFORM" in
+                claude-code) [ -d "./.claude/skills" ] && _local_dir="./.claude/skills" ;;
+                codex)       [ -d "./.codex/skills" ]  && _local_dir="./.codex/skills" ;;
+                gemini)      [ -d "./.gemini/skills" ] && _local_dir="./.gemini/skills" ;;
+                windsurf)    [ -d "./.windsurf/skills" ] && _local_dir="./.windsurf/skills" ;;
+                agents-dir)  [ -d "./.agents/skills" ] && _local_dir="./.agents/skills" ;;
+            esac
+        else
+            case "$APM_PLATFORM" in
+                claude-code) [ -d "./.claude/agents" ] && _local_dir="./.claude/agents" ;;
+                cursor)      [ -d "./.cursor/agents" ] && _local_dir="./.cursor/agents" ;;
+                codex)       [ -d "./.codex/agents" ]  && _local_dir="./.codex/agents" ;;
+                gemini)      [ -d "./.gemini" ]        && _local_dir="./.gemini" ;;
+                windsurf)    [ -d "./.windsurf/rules" ] && _local_dir="./.windsurf/rules" ;;
+                continue)    [ -d "./.continue/rules" ] && _local_dir="./.continue/rules" ;;
+                agents-dir)  [ -d "./.agents" ]        && _local_dir="./.agents" ;;
+            esac
+        fi
 
         if [ -n "$_local_dir" ]; then
             APM_SCOPE="project"
@@ -64,7 +125,9 @@ _apm_resolve_runtime_and_scope() {
 # Call this early in every command after parsing CLI flags.
 apm_load_config() {
     # Save env vars before sourcing config file (config file would overwrite them)
+    _APM_ENV_DEFAULT_MODE="${DEFAULT_MODE:-}"
     _APM_ENV_AGENTS_DB="${AGENTS_DB:-}"
+    _APM_ENV_SKILLS_DB="${SKILLS_DB:-}"
     _APM_ENV_PLATFORM="${PLATFORM:-}"
     _APM_ENV_CLAUDE_AGENTS="${CLAUDE_AGENTS:-}"
     _APM_ENV_CURSOR_AGENTS="${CURSOR_AGENTS:-}"
@@ -79,8 +142,13 @@ apm_load_config() {
     _APM_ENV_GITHUB_OWNER="${GITHUB_OWNER:-}"
     _APM_ENV_GITHUB_MONOREPO="${GITHUB_MONOREPO:-}"
     _APM_ENV_GITHUB_BRANCH="${GITHUB_BRANCH:-}"
+    _APM_ENV_SKILLS_GITHUB_MODE="${SKILLS_GITHUB_MODE:-}"
+    _APM_ENV_SKILLS_GITHUB_OWNER="${SKILLS_GITHUB_OWNER:-}"
+    _APM_ENV_SKILLS_GITHUB_MONOREPO="${SKILLS_GITHUB_MONOREPO:-}"
+    _APM_ENV_SKILLS_GITHUB_BRANCH="${SKILLS_GITHUB_BRANCH:-}"
 
     # Start with built-in defaults
+    APM_DEFAULT_MODE="${_APM_DEFAULT_MODE}"
     APM_PLATFORM="${_APM_DEFAULT_PLATFORM}"
     APM_CLAUDE_AGENTS="${_APM_DEFAULT_CLAUDE_AGENTS}"
     APM_CURSOR_AGENTS="${_APM_DEFAULT_CURSOR_AGENTS}"
@@ -95,14 +163,22 @@ apm_load_config() {
     APM_GITHUB_OWNER=""
     APM_GITHUB_MONOREPO=""
     APM_GITHUB_BRANCH="${_APM_DEFAULT_GITHUB_BRANCH}"
+    APM_SKILLS_GITHUB_MODE=""
+    APM_SKILLS_GITHUB_OWNER=""
+    APM_SKILLS_GITHUB_MONOREPO=""
+    APM_SKILLS_GITHUB_BRANCH="${_APM_DEFAULT_GITHUB_BRANCH}"
     APM_AGENTS_DB=""
+    APM_SKILLS_DB=""
+    APM_MODE="${_APM_DEFAULT_MODE}"
 
     # Load config file if present
     if [ -f "$_APM_CONFIG_FILE" ]; then
         # shellcheck source=/dev/null
         source "$_APM_CONFIG_FILE"
         # Config file uses plain names; map to APM_* vars
+        [ -n "${DEFAULT_MODE:-}" ]    && APM_DEFAULT_MODE="${DEFAULT_MODE}"
         [ -n "${AGENTS_DB:-}" ]       && APM_AGENTS_DB="${AGENTS_DB}"
+        [ -n "${SKILLS_DB:-}" ]       && APM_SKILLS_DB="${SKILLS_DB}"
         [ -n "${PLATFORM:-}" ]        && APM_PLATFORM="${PLATFORM}"
         [ -n "${CLAUDE_AGENTS:-}" ]   && APM_CLAUDE_AGENTS="${CLAUDE_AGENTS}"
         [ -n "${CURSOR_AGENTS:-}" ]    && APM_CURSOR_AGENTS="${CURSOR_AGENTS}"
@@ -117,11 +193,17 @@ apm_load_config() {
         [ -n "${GITHUB_OWNER:-}" ]    && APM_GITHUB_OWNER="${GITHUB_OWNER}"
         [ -n "${GITHUB_MONOREPO:-}" ] && APM_GITHUB_MONOREPO="${GITHUB_MONOREPO}"
         [ -n "${GITHUB_BRANCH:-}" ]   && APM_GITHUB_BRANCH="${GITHUB_BRANCH}"
+        [ -n "${SKILLS_GITHUB_MODE:-}" ]     && APM_SKILLS_GITHUB_MODE="${SKILLS_GITHUB_MODE}"
+        [ -n "${SKILLS_GITHUB_OWNER:-}" ]    && APM_SKILLS_GITHUB_OWNER="${SKILLS_GITHUB_OWNER}"
+        [ -n "${SKILLS_GITHUB_MONOREPO:-}" ] && APM_SKILLS_GITHUB_MONOREPO="${SKILLS_GITHUB_MONOREPO}"
+        [ -n "${SKILLS_GITHUB_BRANCH:-}" ]   && APM_SKILLS_GITHUB_BRANCH="${SKILLS_GITHUB_BRANCH}"
     fi
 
     # Apply env var overrides (higher priority than config file)
     # These use _APM_ENV_* saved before sourcing the config file
+    [ -n "${_APM_ENV_DEFAULT_MODE:-}" ]      && APM_DEFAULT_MODE="${_APM_ENV_DEFAULT_MODE}"
     [ -n "${_APM_ENV_AGENTS_DB:-}" ]        && APM_AGENTS_DB="${_APM_ENV_AGENTS_DB}"
+    [ -n "${_APM_ENV_SKILLS_DB:-}" ]        && APM_SKILLS_DB="${_APM_ENV_SKILLS_DB}"
     [ -n "${_APM_ENV_PLATFORM:-}" ]         && APM_PLATFORM="${_APM_ENV_PLATFORM}"
     [ -n "${_APM_ENV_CLAUDE_AGENTS:-}" ]    && APM_CLAUDE_AGENTS="${_APM_ENV_CLAUDE_AGENTS}"
     [ -n "${_APM_ENV_CURSOR_AGENTS:-}" ]     && APM_CURSOR_AGENTS="${_APM_ENV_CURSOR_AGENTS}"
@@ -136,27 +218,182 @@ apm_load_config() {
     [ -n "${_APM_ENV_GITHUB_OWNER:-}" ]     && APM_GITHUB_OWNER="${_APM_ENV_GITHUB_OWNER}"
     [ -n "${_APM_ENV_GITHUB_MONOREPO:-}" ]  && APM_GITHUB_MONOREPO="${_APM_ENV_GITHUB_MONOREPO}"
     [ -n "${_APM_ENV_GITHUB_BRANCH:-}" ]    && APM_GITHUB_BRANCH="${_APM_ENV_GITHUB_BRANCH}"
+    [ -n "${_APM_ENV_SKILLS_GITHUB_MODE:-}" ]      && APM_SKILLS_GITHUB_MODE="${_APM_ENV_SKILLS_GITHUB_MODE}"
+    [ -n "${_APM_ENV_SKILLS_GITHUB_OWNER:-}" ]     && APM_SKILLS_GITHUB_OWNER="${_APM_ENV_SKILLS_GITHUB_OWNER}"
+    [ -n "${_APM_ENV_SKILLS_GITHUB_MONOREPO:-}" ]  && APM_SKILLS_GITHUB_MONOREPO="${_APM_ENV_SKILLS_GITHUB_MONOREPO}"
+    [ -n "${_APM_ENV_SKILLS_GITHUB_BRANCH:-}" ]    && APM_SKILLS_GITHUB_BRANCH="${_APM_ENV_SKILLS_GITHUB_BRANCH}"
 
+    APM_MODE="${APM_DEFAULT_MODE}"
     # Resolve runtime directory and scope for the platform
     _apm_resolve_runtime_and_scope
+    apm_resolve_active_mode
 
-    export APM_AGENTS_DB APM_PLATFORM APM_CLAUDE_AGENTS APM_CURSOR_AGENTS \
+    export APM_DEFAULT_MODE APM_MODE APM_AGENTS_DB APM_SKILLS_DB APM_PLATFORM APM_CLAUDE_AGENTS APM_CURSOR_AGENTS \
            APM_CODEX_AGENTS APM_GEMINI_MD APM_WINDSURF_RULES APM_CONTINUE_RULES \
            APM_AGENTS_DIR APM_INSTALL_MODE APM_GENERIC_EXPORT APM_GITHUB_MODE \
-           APM_GITHUB_OWNER APM_GITHUB_MONOREPO APM_GITHUB_BRANCH
+           APM_GITHUB_OWNER APM_GITHUB_MONOREPO APM_GITHUB_BRANCH \
+           APM_SKILLS_GITHUB_MODE APM_SKILLS_GITHUB_OWNER \
+           APM_SKILLS_GITHUB_MONOREPO APM_SKILLS_GITHUB_BRANCH
 }
 
 # Apply CLI flag overrides (call after apm_load_config)
 # Expects _CLI_DB and _CLI_PLATFORM to be set by the entrypoint parser
 apm_apply_cli_overrides() {
-    [ -n "${_CLI_DB:-}" ]           && APM_AGENTS_DB="${_CLI_DB}"
+    [ -n "${_CLI_MODE:-}" ]         && APM_MODE="${_CLI_MODE}"
+    if [ -n "${_CLI_DB:-}" ]; then
+        if [ "${APM_MODE:-agents}" = "skills" ]; then
+            APM_SKILLS_DB="${_CLI_DB}"
+        else
+            APM_AGENTS_DB="${_CLI_DB}"
+        fi
+    fi
     [ -n "${_CLI_PLATFORM:-}" ]     && APM_PLATFORM="${_CLI_PLATFORM}"
     [ -n "${_CLI_INSTALL_MODE:-}" ] && APM_INSTALL_MODE="${_CLI_INSTALL_MODE}"
     
     # Re-resolve runtime and scope after platform override
     _apm_resolve_runtime_and_scope
+    apm_resolve_active_mode
 
-    export APM_AGENTS_DB APM_PLATFORM
+    export APM_MODE APM_AGENTS_DB APM_SKILLS_DB APM_PLATFORM
+}
+
+_apm_setup_prompt_mode() {
+    local current="${1:-agents}"
+    local answer=""
+    while true; do
+        printf "Default mode [agents/skills] (%s): " "$current" >&2
+        read -r answer
+        answer="${answer:-$current}"
+        case "$answer" in
+            agents|skills) echo "$answer"; return 0 ;;
+            *) echo "Please enter 'agents' or 'skills'." >&2 ;;
+        esac
+    done
+}
+
+_apm_setup_prompt_platform() {
+    local current="${1:-agents-dir}"
+    local answer=""
+    echo "Default platform:" >&2
+    echo "  1) agents-dir  — ~/.agents/ canonical store (default)" >&2
+    echo "  2) claude-code" >&2
+    echo "  3) cursor" >&2
+    echo "  4) codex" >&2
+    echo "  5) gemini" >&2
+    echo "  6) windsurf" >&2
+    echo "  7) continue" >&2
+    echo "  8) generic     (Desktop export)" >&2
+    while true; do
+        printf "Choice [1-8] or name (%s): " "$current" >&2
+        read -r answer
+        case "${answer:-$current}" in
+            1|agents-dir)  echo "agents-dir"; return 0 ;;
+            2|claude-code) echo "claude-code"; return 0 ;;
+            3|cursor)      echo "cursor"; return 0 ;;
+            4|codex)       echo "codex"; return 0 ;;
+            5|gemini)      echo "gemini"; return 0 ;;
+            6|windsurf)    echo "windsurf"; return 0 ;;
+            7|continue)    echo "continue"; return 0 ;;
+            8|generic)     echo "generic"; return 0 ;;
+            *) echo "Please choose 1-8 or a valid platform name." >&2 ;;
+        esac
+    done
+}
+
+_apm_setup_prompt_install_mode() {
+    local platform="$1"
+    local current="${2:-copy}"
+    local answer=""
+    echo "Install mode:" >&2
+    echo "  1) copy    — write independent file to each platform dir (default)" >&2
+    echo "  2) symlink — link platform dirs back to ~/.agents/" >&2
+    while true; do
+        if [ "$platform" = "agents-dir" ]; then
+            printf "Choice [1-2] (%s; symlink recommended when using agents-dir): " "$current" >&2
+        else
+            printf "Choice [1-2] (%s): " "$current" >&2
+        fi
+        read -r answer
+        case "${answer:-$current}" in
+            1|copy) echo "copy"; return 0 ;;
+            2|symlink) echo "symlink"; return 0 ;;
+            *) echo "Please choose 'copy' or 'symlink'." >&2 ;;
+        esac
+    done
+}
+
+_apm_setup_prompt_github_section() {
+    local entity="$1"
+    local current_mode="$2"
+    local current_owner="$3"
+    local current_repo="$4"
+    local current_branch="$5"
+    local default_repo="$6"
+    local enable_default="N"
+    local enable_answer=""
+    local mode="" owner="" repo="" branch=""
+    local entity_title="Agents"
+
+    [ "$entity" = "skills" ] && entity_title="Skills"
+
+    if [ -n "$current_owner" ]; then
+        enable_default="Y"
+    fi
+
+    while true; do
+        printf "Enable %s GitHub sync? [y/N] " "$entity" >&2
+        if [ "$enable_default" = "Y" ]; then
+            printf "(current: yes): " >&2
+        fi
+        read -r enable_answer
+        case "${enable_answer:-$enable_default}" in
+            y|Y)
+                while true; do
+                    echo "${entity_title} GitHub mode:" >&2
+                    echo "  1) monorepo  — all ${entity} in one repo, each in a subdirectory (default)" >&2
+                    if [ "$entity" = "skills" ]; then
+                        echo "  2) per-agent — each skill has its own repo" >&2
+                    else
+                        echo "  2) per-agent — each agent has its own repo" >&2
+                    fi
+                    printf "Choice [1-2] or name (%s): " "${current_mode:-monorepo}" >&2
+                    read -r mode
+                    case "${mode:-${current_mode:-monorepo}}" in
+                        1|monorepo) mode="monorepo"; break ;;
+                        2|per-agent) mode="per-agent"; break ;;
+                        *) echo "Please choose 'monorepo' or 'per-agent'." >&2 ;;
+                    esac
+                done
+
+                while true; do
+                    printf "%s GitHub owner or org [%s]: " "$entity" "${current_owner:-}" >&2
+                    read -r owner
+                    owner="${owner:-$current_owner}"
+                    [ -n "$owner" ] && break
+                    echo "GitHub owner is required when sync is enabled." >&2
+                done
+
+                repo=""
+                if [ "$mode" = "monorepo" ]; then
+                    printf "%s GitHub monorepo name [%s]: " "$entity" "${current_repo:-$default_repo}" >&2
+                    read -r repo
+                    repo="${repo:-${current_repo:-$default_repo}}"
+                fi
+
+                printf "%s default branch [%s]: " "$entity" "${current_branch:-main}" >&2
+                read -r branch
+                branch="${branch:-${current_branch:-main}}"
+
+                printf "%s|%s|%s|%s\n" "$mode" "$owner" "$repo" "$branch"
+                return 0
+                ;;
+            n|N)
+                printf "|||%s\n" "${current_branch:-main}"
+                return 0
+                ;;
+            *) echo "Please answer y or n." >&2 ;;
+        esac
+    done
 }
 
 # Interactive setup wizard — creates ~/.config/apm/config.sh
@@ -175,82 +412,64 @@ apm_setup_wizard() {
     fi
 
     # Gather values
-    printf "Local database path [${HOME}/agents_db]: "
+    local _current_agents_db="${APM_AGENTS_DB:-${_APM_DEFAULT_AGENTS_DB}}"
+    local _current_skills_db="${APM_SKILLS_DB:-${_APM_DEFAULT_SKILLS_DB}}"
+    local _current_default_mode="${APM_DEFAULT_MODE:-${_APM_DEFAULT_MODE}}"
+    local _current_platform="${APM_PLATFORM:-${_APM_DEFAULT_PLATFORM}}"
+    local _current_install_mode="${APM_INSTALL_MODE:-${_APM_DEFAULT_INSTALL_MODE}}"
+
+    printf "Agents database path [%s]: " "$_current_agents_db"
     read -r _db
-    _db="${_db:-${HOME}/agents_db}"
+    _db="${_db:-$_current_agents_db}"
     _db="${_db/#\~/$HOME}"
 
-    echo "Default platform:"
-    echo "  1) agents-dir  — ~/.agents/ canonical store (default)"
-    echo "  2) claude-code"
-    echo "  3) cursor"
-    echo "  4) codex"
-    echo "  5) gemini"
-    echo "  6) windsurf"
-    echo "  7) continue"
-    echo "  8) generic     (Desktop export)"
-    printf "Choice [1-8] or name (agents-dir): "
-    read -r _platform_input
-    case "${_platform_input:-1}" in
-        1|agents-dir)  _platform="agents-dir" ;;
-        2|claude-code) _platform="claude-code" ;;
-        3|cursor)      _platform="cursor" ;;
-        4|codex)       _platform="codex" ;;
-        5|gemini)      _platform="gemini" ;;
-        6|windsurf)    _platform="windsurf" ;;
-        7|continue)    _platform="continue" ;;
-        8|generic)     _platform="generic" ;;
-        *)             _platform="${_platform_input:-agents-dir}" ;;
-    esac
+    printf "Skills database path [%s]: " "$_current_skills_db"
+    read -r _skills_db
+    _skills_db="${_skills_db:-$_current_skills_db}"
+    _skills_db="${_skills_db/#\~/$HOME}"
 
-    echo "Install mode:"
-    echo "  1) copy    — write independent file to each platform dir (default)"
-    echo "  2) symlink — link platform dirs back to ~/.agents/"
-    if [ "$_platform" = "agents-dir" ]; then
-        printf "Choice [1-2] (symlink recommended when using agents-dir): "
-    else
-        printf "Choice [1-2] (copy): "
-    fi
-    read -r _install_mode_input
-    case "${_install_mode_input:-1}" in
-        1|copy)    _install_mode="copy" ;;
-        2|symlink) _install_mode="symlink" ;;
-        *)         _install_mode="copy" ;;
-    esac
+    _default_mode=$(_apm_setup_prompt_mode "$_current_default_mode")
+    _platform=$(_apm_setup_prompt_platform "$_current_platform")
+    _install_mode=$(_apm_setup_prompt_install_mode "$_platform" "$_current_install_mode")
 
-    printf "Enable GitHub sync? [y/N] "
-    read -r _github_yn
-    _github_mode=""
-    _github_owner=""
-    _github_monorepo=""
-    _github_branch="main"
+    local _agent_github _skills_github
+    _agent_github=$(_apm_setup_prompt_github_section \
+        "agents" \
+        "${APM_GITHUB_MODE:-}" \
+        "${APM_GITHUB_OWNER:-}" \
+        "${APM_GITHUB_MONOREPO:-}" \
+        "${APM_GITHUB_BRANCH:-${_APM_DEFAULT_GITHUB_BRANCH}}" \
+        "agents")
+    IFS='|' read -r _github_mode _github_owner _github_monorepo _github_branch <<< "$_agent_github"
 
-    case "$_github_yn" in
-        [yY]*)
-            echo "GitHub mode:"
-            echo "  1) monorepo  — all agents in one repo, each in a subdirectory (default)"
-            echo "  2) per-agent — each agent has its own repo"
-            printf "Choice [1-2] or name (monorepo): "
-            read -r _github_mode_input
-            case "${_github_mode_input:-1}" in
-                1|monorepo)  _github_mode="monorepo" ;;
-                2|per-agent) _github_mode="per-agent" ;;
-                *)           _github_mode="${_github_mode_input:-monorepo}" ;;
-            esac
+    _skills_github=$(_apm_setup_prompt_github_section \
+        "skills" \
+        "${APM_SKILLS_GITHUB_MODE:-}" \
+        "${APM_SKILLS_GITHUB_OWNER:-}" \
+        "${APM_SKILLS_GITHUB_MONOREPO:-}" \
+        "${APM_SKILLS_GITHUB_BRANCH:-${_APM_DEFAULT_GITHUB_BRANCH}}" \
+        "skills")
+    IFS='|' read -r _skills_github_mode _skills_github_owner _skills_github_monorepo _skills_github_branch <<< "$_skills_github"
 
-            printf "GitHub owner or org (your GitHub username or org name): "
-            read -r _github_owner
-
-            if [ "$_github_mode" = "monorepo" ]; then
-                printf "GitHub monorepo name [agents]: "
-                read -r _github_monorepo
-                _github_monorepo="${_github_monorepo:-agents}"
-            fi
-
-            printf "Default branch [main]: "
-            read -r _github_branch
-            _github_branch="${_github_branch:-main}"
-            ;;
+    echo ""
+    echo "Review configuration:"
+    echo "  Default mode    : ${_default_mode}"
+    echo "  Agents db       : ${_db}"
+    echo "  Skills db       : ${_skills_db}"
+    echo "  Platform        : ${_platform}"
+    echo "  Install mode    : ${_install_mode}"
+    echo "  Agents GitHub   : ${_github_mode:-disabled} / ${_github_owner:-<none>}"
+    [ -n "${_github_monorepo:-}" ] && echo "  Agents repo     : ${_github_monorepo}"
+    echo "  Agents branch   : ${_github_branch:-${_APM_DEFAULT_GITHUB_BRANCH}}"
+    echo "  Skills GitHub   : ${_skills_github_mode:-disabled} / ${_skills_github_owner:-<none>}"
+    [ -n "${_skills_github_monorepo:-}" ] && echo "  Skills repo     : ${_skills_github_monorepo}"
+    echo "  Skills branch   : ${_skills_github_branch:-${_APM_DEFAULT_GITHUB_BRANCH}}"
+    echo ""
+    printf "Write config? [y/N] "
+    read -r _confirm_write
+    case "$_confirm_write" in
+        [yY]*) ;;
+        *) echo "Setup cancelled."; return 0 ;;
     esac
 
     # Write config file atomically (temp + rename to avoid partial writes)
@@ -266,6 +485,8 @@ apm_setup_wizard() {
 # Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 AGENTS_DB="${_db}"
+SKILLS_DB="${_skills_db}"
+DEFAULT_MODE="${_default_mode}"
 PLATFORM="${_platform}"
 INSTALL_MODE="${_install_mode}"
 CLAUDE_AGENTS="\${HOME}/.claude/agents"
@@ -280,6 +501,10 @@ GITHUB_MODE="${_github_mode}"
 GITHUB_OWNER="${_github_owner}"
 GITHUB_MONOREPO="${_github_monorepo}"
 GITHUB_BRANCH="${_github_branch}"
+SKILLS_GITHUB_MODE="${_skills_github_mode}"
+SKILLS_GITHUB_OWNER="${_skills_github_owner}"
+SKILLS_GITHUB_MONOREPO="${_skills_github_monorepo}"
+SKILLS_GITHUB_BRANCH="${_skills_github_branch}"
 EOF
 
     mv "$_tmp_cfg" "$_APM_CONFIG_FILE" || {

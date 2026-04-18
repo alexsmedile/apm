@@ -85,6 +85,23 @@ apm install git-mentor
 
 `apm` resolves: canonical ID → platform → runtime alias → target file path.
 
+### How do I install one skill?
+
+Use skills mode on a platform that supports skill directories:
+
+```text
+apm --mode skills --platform claude-code install browser-use
+```
+
+Current skill-install platforms:
+- `claude-code`
+- `codex`
+- `gemini`
+- `windsurf`
+- `agents-dir`
+
+This creates a symlink from the platform skill target directory back to the canonical skill folder in `SKILLS_DB`.
+
 ### Can installs use symlinks instead of copying the runtime file?
 
 Yes.

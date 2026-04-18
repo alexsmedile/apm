@@ -85,7 +85,7 @@ test_github_diff_in_sync() {
 run_test "github-diff: identical dirs → in-sync" test_github_diff_in_sync
 
 # ---------------------------------------------------------------------------
-# Python: github-diff — out-of-sync when content differs
+# Python: github-diff — outdated when content differs
 # ---------------------------------------------------------------------------
 
 test_github_diff_out_of_sync() {
@@ -108,10 +108,10 @@ test_github_diff_out_of_sync() {
     rm -rf "$tmpdir"
     [ "$in_sync" = "false" ]
 }
-run_test "github-diff: modified file → out-of-sync" test_github_diff_out_of_sync
+run_test "github-diff: modified file → outdated" test_github_diff_out_of_sync
 
 # ---------------------------------------------------------------------------
-# Python: github-diff — missing agent dir → out-of-sync with missing_in_library empty
+# Python: github-diff — outdated when agent dir is missing
 # ---------------------------------------------------------------------------
 
 test_github_diff_agent_not_in_github() {
@@ -129,10 +129,10 @@ test_github_diff_agent_not_in_github() {
     rm -rf "$tmpdir"
     [ "$in_sync" = "false" ] && [ "$missing_in_github_count" -gt 0 ]
 }
-run_test "github-diff: agent not in github → out-of-sync, files in missing_in_github" test_github_diff_agent_not_in_github
+run_test "github-diff: agent not in github → outdated, files in missing_in_github" test_github_diff_agent_not_in_github
 
 # ---------------------------------------------------------------------------
-# Python: github-diff exits 1 when out-of-sync
+# Python: github-diff exits 1 when outdated
 # ---------------------------------------------------------------------------
 
 test_github_diff_exit_code_out_of_sync() {
@@ -146,7 +146,7 @@ test_github_diff_exit_code_out_of_sync() {
     rm -rf "$tmpdir"
     [ "$ec" = "1" ]
 }
-run_test "github-diff: exits 1 when out-of-sync" test_github_diff_exit_code_out_of_sync
+run_test "github-diff: exits 1 when outdated" test_github_diff_exit_code_out_of_sync
 
 # ---------------------------------------------------------------------------
 # Python: github-diff exits 0 when in-sync
@@ -683,9 +683,9 @@ test_per_agent_cli_push_idempotent() {
     local ec=$?
 
     rm -rf "$lockdir" "$tmpdb" "$bare_gm" "$bare_rv"
-    [ $ec -eq 0 ] && echo "$out" | grep -q "already in-sync\|Nothing to push"
+    [ $ec -eq 0 ] && echo "$out" | grep -q "already current\|Nothing to push"
 }
-run_test "per-agent CLI: second push reports already in-sync" test_per_agent_cli_push_idempotent
+run_test "per-agent CLI: second push reports already current" test_per_agent_cli_push_idempotent
 
 # ---------------------------------------------------------------------------
 # per-agent CLI: push --dry-run writes nothing to the bare repo
@@ -712,7 +712,7 @@ test_per_agent_cli_push_dry_run() {
 run_test "per-agent CLI: push --dry-run writes nothing to remote" test_per_agent_cli_push_dry_run
 
 # ---------------------------------------------------------------------------
-# per-agent CLI: github diff shows in-sync after push
+# per-agent CLI: github diff shows current after push
 # ---------------------------------------------------------------------------
 
 test_per_agent_cli_diff_insync_after_push() {
@@ -727,9 +727,9 @@ test_per_agent_cli_diff_insync_after_push() {
     local ec=$?
 
     rm -rf "$lockdir" "$tmpdb" "$bare_gm" "$bare_rv"
-    [ $ec -eq 0 ] && echo "$out" | grep -q "in-sync"
+    [ $ec -eq 0 ] && echo "$out" | grep -q "current"
 }
-run_test "per-agent CLI: diff shows in-sync after push" test_per_agent_cli_diff_insync_after_push
+run_test "per-agent CLI: diff shows current after push" test_per_agent_cli_diff_insync_after_push
 
 # ---------------------------------------------------------------------------
 # per-agent CLI: github diff shows changed after local edit
@@ -768,7 +768,7 @@ test_per_agent_cli_status_before_push() {
     local ec=$?
 
     rm -rf "$lockdir" "$tmpdb" "$bare_gm" "$bare_rv"
-    # Repos exist (seeded) but content differs from library — reported as out-of-sync.
+    # Repos exist (seeded) but content differs from library — reported as outdated.
     # Neither agent should be in-sync before push.
     [ $ec -eq 0 ] && ! echo "$out" | grep -q "in-sync"
 }
@@ -952,9 +952,9 @@ test_per_agent_cli_full_round_trip() {
     local ec=$?
 
     rm -rf "$lockdir" "$tmpdb" "$bare_gm" "$bare_rv"
-    [ $ec -eq 0 ] && echo "$out" | grep -q "already in-sync\|Nothing to push"
+    [ $ec -eq 0 ] && echo "$out" | grep -q "already current\|Nothing to push"
 }
-run_test "per-agent CLI: full round-trip push→edit→pull→push reports in-sync" test_per_agent_cli_full_round_trip
+run_test "per-agent CLI: full round-trip push→edit→pull→push reports current" test_per_agent_cli_full_round_trip
 
 # ---------------------------------------------------------------------------
 # per-agent CLI: missing git dependency exits 3

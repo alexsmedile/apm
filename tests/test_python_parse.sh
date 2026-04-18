@@ -101,6 +101,85 @@ print(len(d.get('agents',[])))
 }
 run_test "list-agents: finds 2 agents in library-basic" test_list_agents_count
 
+test_list_skills_count() {
+    local out
+    out=$(python3 "$PY" list-skills --db "$FIXTURES/skills-basic")
+    local count
+    count=$(python3 -c "
+import json,sys
+d=json.loads(sys.argv[1])
+print(len(d.get('skills',[])))
+" "$out")
+    [ "$count" = "2" ]
+}
+run_test "list-skills: finds 2 skills in skills-basic" test_list_skills_count
+
+test_list_skills_nested_repo_count() {
+    local out
+    out=$(python3 "$PY" list-skills --db "$FIXTURES/skills-nested")
+    local count
+    count=$(python3 -c "
+import json,sys
+d=json.loads(sys.argv[1])
+print(len(d.get('skills',[])))
+" "$out")
+    [ "$count" = "2" ]
+}
+run_test "list-skills: finds nested repo skills under repo/skills" test_list_skills_nested_repo_count
+
+test_status_skills_count() {
+    local out
+    out=$(python3 "$PY" status-skills --db "$FIXTURES/skills-basic")
+    local count
+    count=$(python3 -c "
+import json,sys
+d=json.loads(sys.argv[1])
+print(len(d.get('skills',[])))
+" "$out")
+    [ "$count" = "2" ]
+}
+run_test "status-skills: reports 2 skills in skills-basic" test_status_skills_count
+
+test_status_skills_nested_repo_count() {
+    local out
+    out=$(python3 "$PY" status-skills --db "$FIXTURES/skills-nested")
+    local count
+    count=$(python3 -c "
+import json,sys
+d=json.loads(sys.argv[1])
+print(len(d.get('skills',[])))
+" "$out")
+    [ "$count" = "2" ]
+}
+run_test "status-skills: reports nested repo skills under repo/skills" test_status_skills_nested_repo_count
+
+test_status_skills_ready_state() {
+    local out
+    out=$(python3 "$PY" status-skills --db "$FIXTURES/skills-basic")
+    local ready_count
+    ready_count=$(python3 -c "
+import json,sys
+d=json.loads(sys.argv[1])
+print(sum(1 for s in d.get('skills', []) if s.get('state', {}).get('sync') == 'ready'))
+" "$out")
+    [ "$ready_count" = "2" ]
+}
+run_test "status-skills: local skills default to ready" test_status_skills_ready_state
+
+test_status_skills_nested_repo_paths() {
+    local out
+    out=$(python3 "$PY" status-skills --db "$FIXTURES/skills-nested")
+    echo "$out" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+skills = {s['id']: s for s in d.get('skills', [])}
+assert skills['browser-use']['paths']['skill_dir'].endswith('/repo-one/skills/browser-use')
+assert skills['browser-use']['paths']['root_file'].endswith('/repo-one/skills/browser-use/SKILL.md')
+assert skills['shadcn']['paths']['skill_dir'].endswith('/repo-one/skills/shadcn')
+"
+}
+run_test "status-skills: nested repo exposes resolved skill paths" test_status_skills_nested_repo_paths
+
 # --- validate-all ---
 
 test_validate_all_basic_valid() {
