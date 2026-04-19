@@ -45,7 +45,7 @@ PLATFORM_ALIASES = {
     'generic':     'gen',
 }
 
-SKILL_SUPPORTED_PLATFORMS = {'claude-code', 'codex', 'gemini', 'windsurf', 'agents-dir'}
+SKILL_SUPPORTED_PLATFORMS = {'claude-code', 'codex', 'windsurf', 'agents-dir'}
 
 # ---------------------------------------------------------------------------
 # Frontmatter parsing

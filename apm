@@ -126,7 +126,7 @@ cmd_init() {
         case "$target_plat" in
             claude-code) local_dir="./.claude/skills" ;;
             codex)       local_dir="./.codex/skills" ;;
-            gemini)      local_dir="./.gemini/skills" ;;
+            gemini)      apm_die 2 "Skill initialization is not yet supported for platform: $target_plat" ;;
             windsurf)    local_dir="./.windsurf/skills" ;;
             agents-dir)  local_dir="./.agents/skills" ;;
             *)           apm_die 2 "Skill initialization not supported for platform: $target_plat" ;;
@@ -136,7 +136,7 @@ cmd_init() {
             claude-code) local_dir="./.claude/agents" ;;
             cursor)      local_dir="./.cursor/agents" ;;
             codex)       local_dir="./.codex/agents" ;;
-            gemini)      local_dir="./.gemini" ;;
+            gemini)      local_dir="./.gemini/agents" ;;
             windsurf)    local_dir="./.windsurf/rules" ;;
             continue)    local_dir="./.continue/rules" ;;
             agents-dir)  local_dir="./.agents" ;;
@@ -188,7 +188,7 @@ print(json.dumps({
     'claude_agents':   '${APM_CLAUDE_AGENTS}',
     'cursor_agents':   '${APM_CURSOR_AGENTS}',
     'codex_agents':    '${APM_CODEX_AGENTS}',
-    'gemini_md':       '${APM_GEMINI_MD}',
+    'gemini_agents':   '${APM_GEMINI_AGENTS}',
     'windsurf_rules':  '${APM_WINDSURF_RULES}',
     'continue_rules':  '${APM_CONTINUE_RULES}',
     'agents_dir':      '${APM_AGENTS_DIR}',
@@ -224,7 +224,7 @@ print(json.dumps({
     echo "  Claude agents   : ${APM_CLAUDE_AGENTS}"
     echo "  Cursor agents   : ${APM_CURSOR_AGENTS}"
     echo "  Codex agents    : ${APM_CODEX_AGENTS}"
-    echo "  Gemini dir      : ${APM_GEMINI_MD}"
+    echo "  Gemini agents   : ${APM_GEMINI_AGENTS}"
     echo "  Windsurf rules  : ${APM_WINDSURF_RULES}"
     echo "  Continue rules  : ${APM_CONTINUE_RULES}"
     echo "  Agents dir      : ${APM_AGENTS_DIR}"
@@ -686,9 +686,9 @@ print()
 
 _apm_skills_require_supported_platform() {
     case "${APM_PLATFORM:-}" in
-        claude-code|codex|gemini|windsurf|agents-dir) ;;
+        claude-code|codex|windsurf|agents-dir) ;;
         *)
-            apm_die 2 "Skills install is not supported for platform: ${APM_PLATFORM}. Supported: claude-code, codex, gemini, windsurf, agents-dir"
+            apm_die 2 "Skills install is not supported for platform: ${APM_PLATFORM}. Supported: claude-code, codex, windsurf, agents-dir"
             ;;
     esac
 }
