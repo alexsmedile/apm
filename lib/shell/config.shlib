@@ -17,7 +17,7 @@ _APM_DEFAULT_SKILLS_DB="${HOME}/skills_db"
 _APM_DEFAULT_CLAUDE_AGENTS="${HOME}/.claude/agents"
 _APM_DEFAULT_CURSOR_AGENTS="${HOME}/.cursor/agents"
 _APM_DEFAULT_CODEX_AGENTS="${HOME}/.codex/agents"
-_APM_DEFAULT_GEMINI_MD="${HOME}/.gemini"
+_APM_DEFAULT_GEMINI_AGENTS="${HOME}/.gemini/agents"
 _APM_DEFAULT_WINDSURF_RULES="${HOME}/.windsurf/rules"
 _APM_DEFAULT_CONTINUE_RULES="${HOME}/.continue/rules"
 _APM_DEFAULT_AGENTS_DIR="${HOME}/.agents"
@@ -69,7 +69,7 @@ _apm_resolve_runtime_and_scope() {
         case "$APM_PLATFORM" in
             claude-code) APM_RUNTIME_DIR="${HOME}/.claude/skills" ;;
             codex)       APM_RUNTIME_DIR="${HOME}/.codex/skills" ;;
-            gemini)      APM_RUNTIME_DIR="${HOME}/.gemini/skills" ;;
+            gemini)      APM_RUNTIME_DIR="" ;;
             windsurf)    APM_RUNTIME_DIR="${HOME}/.codeium/windsurf/skills" ;;
             agents-dir)  APM_RUNTIME_DIR="${APM_AGENTS_DIR}/skills" ;;
             *)           APM_RUNTIME_DIR="" ;;
@@ -79,7 +79,7 @@ _apm_resolve_runtime_and_scope() {
             claude-code) APM_RUNTIME_DIR="${APM_CLAUDE_AGENTS}" ;;
             cursor)      APM_RUNTIME_DIR="${APM_CURSOR_AGENTS}" ;;
             codex)       APM_RUNTIME_DIR="${APM_CODEX_AGENTS}" ;;
-            gemini)      APM_RUNTIME_DIR="${APM_GEMINI_MD}" ;;
+            gemini)      APM_RUNTIME_DIR="${APM_GEMINI_AGENTS}" ;;
             windsurf)    APM_RUNTIME_DIR="${APM_WINDSURF_RULES}" ;;
             continue)    APM_RUNTIME_DIR="${APM_CONTINUE_RULES}" ;;
             agents-dir)  APM_RUNTIME_DIR="${APM_AGENTS_DIR}" ;;
@@ -96,7 +96,7 @@ _apm_resolve_runtime_and_scope() {
             case "$APM_PLATFORM" in
                 claude-code) [ -d "./.claude/skills" ] && _local_dir="./.claude/skills" ;;
                 codex)       [ -d "./.codex/skills" ]  && _local_dir="./.codex/skills" ;;
-                gemini)      [ -d "./.gemini/skills" ] && _local_dir="./.gemini/skills" ;;
+                gemini)      ;;
                 windsurf)    [ -d "./.windsurf/skills" ] && _local_dir="./.windsurf/skills" ;;
                 agents-dir)  [ -d "./.agents/skills" ] && _local_dir="./.agents/skills" ;;
             esac
@@ -105,7 +105,7 @@ _apm_resolve_runtime_and_scope() {
                 claude-code) [ -d "./.claude/agents" ] && _local_dir="./.claude/agents" ;;
                 cursor)      [ -d "./.cursor/agents" ] && _local_dir="./.cursor/agents" ;;
                 codex)       [ -d "./.codex/agents" ]  && _local_dir="./.codex/agents" ;;
-                gemini)      [ -d "./.gemini" ]        && _local_dir="./.gemini" ;;
+                gemini)      [ -d "./.gemini/agents" ] && _local_dir="./.gemini/agents" ;;
                 windsurf)    [ -d "./.windsurf/rules" ] && _local_dir="./.windsurf/rules" ;;
                 continue)    [ -d "./.continue/rules" ] && _local_dir="./.continue/rules" ;;
                 agents-dir)  [ -d "./.agents" ]        && _local_dir="./.agents" ;;
@@ -132,7 +132,7 @@ apm_load_config() {
     _APM_ENV_CLAUDE_AGENTS="${CLAUDE_AGENTS:-}"
     _APM_ENV_CURSOR_AGENTS="${CURSOR_AGENTS:-}"
     _APM_ENV_CODEX_AGENTS="${CODEX_AGENTS:-}"
-    _APM_ENV_GEMINI_MD="${GEMINI_MD:-}"
+    _APM_ENV_GEMINI_AGENTS="${GEMINI_AGENTS:-${GEMINI_MD:-}}"
     _APM_ENV_WINDSURF_RULES="${WINDSURF_RULES:-}"
     _APM_ENV_CONTINUE_RULES="${CONTINUE_RULES:-}"
     _APM_ENV_AGENTS_DIR="${AGENTS_DIR:-}"
@@ -153,7 +153,7 @@ apm_load_config() {
     APM_CLAUDE_AGENTS="${_APM_DEFAULT_CLAUDE_AGENTS}"
     APM_CURSOR_AGENTS="${_APM_DEFAULT_CURSOR_AGENTS}"
     APM_CODEX_AGENTS="${_APM_DEFAULT_CODEX_AGENTS}"
-    APM_GEMINI_MD="${_APM_DEFAULT_GEMINI_MD}"
+    APM_GEMINI_AGENTS="${_APM_DEFAULT_GEMINI_AGENTS}"
     APM_WINDSURF_RULES="${_APM_DEFAULT_WINDSURF_RULES}"
     APM_CONTINUE_RULES="${_APM_DEFAULT_CONTINUE_RULES}"
     APM_AGENTS_DIR="${_APM_DEFAULT_AGENTS_DIR}"
@@ -183,7 +183,8 @@ apm_load_config() {
         [ -n "${CLAUDE_AGENTS:-}" ]   && APM_CLAUDE_AGENTS="${CLAUDE_AGENTS}"
         [ -n "${CURSOR_AGENTS:-}" ]    && APM_CURSOR_AGENTS="${CURSOR_AGENTS}"
         [ -n "${CODEX_AGENTS:-}" ]    && APM_CODEX_AGENTS="${CODEX_AGENTS}"
-        [ -n "${GEMINI_MD:-}" ]       && APM_GEMINI_MD="${GEMINI_MD}"
+        [ -n "${GEMINI_AGENTS:-}" ]   && APM_GEMINI_AGENTS="${GEMINI_AGENTS}"
+        [ -n "${GEMINI_MD:-}" ]       && APM_GEMINI_AGENTS="${GEMINI_MD}"
         [ -n "${WINDSURF_RULES:-}" ]  && APM_WINDSURF_RULES="${WINDSURF_RULES}"
         [ -n "${CONTINUE_RULES:-}" ]  && APM_CONTINUE_RULES="${CONTINUE_RULES}"
         [ -n "${AGENTS_DIR:-}" ]      && APM_AGENTS_DIR="${AGENTS_DIR}"
@@ -208,7 +209,7 @@ apm_load_config() {
     [ -n "${_APM_ENV_CLAUDE_AGENTS:-}" ]    && APM_CLAUDE_AGENTS="${_APM_ENV_CLAUDE_AGENTS}"
     [ -n "${_APM_ENV_CURSOR_AGENTS:-}" ]     && APM_CURSOR_AGENTS="${_APM_ENV_CURSOR_AGENTS}"
     [ -n "${_APM_ENV_CODEX_AGENTS:-}" ]     && APM_CODEX_AGENTS="${_APM_ENV_CODEX_AGENTS}"
-    [ -n "${_APM_ENV_GEMINI_MD:-}" ]        && APM_GEMINI_MD="${_APM_ENV_GEMINI_MD}"
+    [ -n "${_APM_ENV_GEMINI_AGENTS:-}" ]    && APM_GEMINI_AGENTS="${_APM_ENV_GEMINI_AGENTS}"
     [ -n "${_APM_ENV_WINDSURF_RULES:-}" ]   && APM_WINDSURF_RULES="${_APM_ENV_WINDSURF_RULES}"
     [ -n "${_APM_ENV_CONTINUE_RULES:-}" ]   && APM_CONTINUE_RULES="${_APM_ENV_CONTINUE_RULES}"
     [ -n "${_APM_ENV_AGENTS_DIR:-}" ]       && APM_AGENTS_DIR="${_APM_ENV_AGENTS_DIR}"
@@ -229,7 +230,7 @@ apm_load_config() {
     apm_resolve_active_mode
 
     export APM_DEFAULT_MODE APM_MODE APM_AGENTS_DB APM_SKILLS_DB APM_PLATFORM APM_CLAUDE_AGENTS APM_CURSOR_AGENTS \
-           APM_CODEX_AGENTS APM_GEMINI_MD APM_WINDSURF_RULES APM_CONTINUE_RULES \
+           APM_CODEX_AGENTS APM_GEMINI_AGENTS APM_WINDSURF_RULES APM_CONTINUE_RULES \
            APM_AGENTS_DIR APM_INSTALL_MODE APM_GENERIC_EXPORT APM_GITHUB_MODE \
            APM_GITHUB_OWNER APM_GITHUB_MONOREPO APM_GITHUB_BRANCH \
            APM_SKILLS_GITHUB_MODE APM_SKILLS_GITHUB_OWNER \
@@ -492,7 +493,7 @@ INSTALL_MODE="${_install_mode}"
 CLAUDE_AGENTS="\${HOME}/.claude/agents"
 CURSOR_AGENTS="\${HOME}/.cursor/agents"
 CODEX_AGENTS="\${HOME}/.codex/agents"
-GEMINI_MD="\${HOME}/.gemini"
+GEMINI_AGENTS="\${HOME}/.gemini/agents"
 WINDSURF_RULES="\${HOME}/.windsurf/rules"
 CONTINUE_RULES="\${HOME}/.continue/rules"
 AGENTS_DIR="\${HOME}/.agents"

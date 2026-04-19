@@ -56,6 +56,29 @@ test_init_claude_code() {
 }
 run_test "init: creates .claude/agents and detects project scope" test_init_claude_code
 
+test_init_gemini_agents() {
+    local workdir
+    workdir=$(mktemp -d)
+    local old_pwd=$(pwd)
+    cd "$workdir" || return 1
+
+    APM_FORCE=1 bash "$PROJECT_ROOT/apm" --platform gemini init >/dev/null
+
+    local ok=0
+    if [ -d ".gemini/agents" ]; then
+        local out
+        out=$(bash "$PROJECT_ROOT/apm" --platform gemini --json config)
+        if assert_json_field "$out" "scope" "project" && assert_json_field "$out" "runtime_dir" "./.gemini/agents"; then
+            ok=1
+        fi
+    fi
+
+    cd "$old_pwd" || return 1
+    rm -rf "$workdir"
+    [ "$ok" -eq 1 ] || return 1
+}
+run_test "init: creates .gemini/agents and detects project scope" test_init_gemini_agents
+
 # ---------------------------------------------------------------------------
 # ls -a (platform filtering)
 # ---------------------------------------------------------------------------

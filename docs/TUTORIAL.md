@@ -198,11 +198,7 @@ Agent install targets:
 | Platform | Global target | Project target |
 |---|---|---|
 | `claude-code` | `~/.claude/agents/` | `.claude/agents/` |
-| `cursor` | `~/.cursor/agents/` | `.cursor/agents/` |
-| `codex` | `~/.codex/agents/` | `.codex/agents/` |
-| `gemini` | `~/.gemini/` | `.gemini/` |
-| `windsurf` | `~/.windsurf/rules/` | `.windsurf/rules/` |
-| `continue` | `~/.continue/rules/` | `.continue/rules/` |
+| `gemini` | `~/.gemini/agents/` | `.gemini/agents/` |
 | `agents-dir` | `~/.agents/` | `.agents/` |
 
 Skills install targets:
@@ -211,11 +207,10 @@ Skills install targets:
 |---|---|---|---|
 | `claude-code` | `~/.claude/skills/` | `.claude/skills/` | symlink skill dir |
 | `codex` | `~/.codex/skills/` | `.codex/skills/` | symlink skill dir |
-| `gemini` | `~/.gemini/skills/` | `.gemini/skills/` | symlink skill dir |
 | `windsurf` | `~/.codeium/windsurf/skills/` | `.windsurf/skills/` | symlink skill dir |
 | `agents-dir` | `~/.agents/skills/` | `.agents/skills/` | symlink skill dir |
 
-Skills are not installable for `cursor`, `continue`, or `generic`.
+Skills are not installable for `cursor`, `continue`, `generic`, or `gemini`.
 
 ### Optional: use symlink mode for installs
 

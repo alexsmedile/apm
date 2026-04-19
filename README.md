@@ -3,16 +3,14 @@ _Write an agent once. Install it everywhere._
 
 **A local-first CLI package manager for AI agent and skill files.**
 
-`apm` syncs your library of agent definitions and manages their installation into agentic coding tools (e.g. Claude Code, Codex, Gemini, etc.).
+`apm` syncs your library of agent definitions and manages installation into the agent runtimes it currently verifies end-to-end.
 
 It handles: `install`, `diff`, `update`, `import`, and optional **GitHub sync** — all with atomic writes, locking, and backups.
 
-<div align="center">
-
-| **Works with** | <img src="https://img.shields.io/badge/Claude_Code-cc6b39?style=flat-square&logo=anthropic&logoColor=white" alt="Claude Code" /> | <img src="https://img.shields.io/badge/Codex-412991?style=flat-square&logo=openai&logoColor=white" alt="Codex" /> | <img src="https://img.shields.io/badge/Cursor-000000?style=flat-square&logo=cursor&logoColor=white" alt="Cursor" /> | <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=google&logoColor=white" alt="Gemini" /> | <img src="https://img.shields.io/badge/Generic-6c757d?style=flat-square&logo=terminal&logoColor=white" alt="Generic" /> |
-|---|:---:|:---:|:---:|:---:|:---:|
-
-</div>
+| Status | Targets |
+|---|---|
+| **Managed now** | Claude Code agents and skills, Gemini CLI agents, Codex skills, Windsurf skills, `agents-dir` generic store |
+| **Coming soon / not yet verified end-to-end** | Cursor, Continue, Codex agents, Windsurf rules, Gemini skills, generic export UX |
 
 > This tool is under active development. It may contain bugs. Always back up your data.
 
@@ -22,7 +20,7 @@ It handles: `install`, `diff`, `update`, `import`, and optional **GitHub sync** 
 <tr>
 <td align="center" width="33%">
 <h3>📚 One Library, All Tools</h3>
-Define an agent once in your library. Install it to Claude Code, Codex, Cursor, or Gemini — with the right format for each.
+Define an agent once in your library. Install it to the runtimes `apm` currently verifies — with the right format for each.
 </td>
 <td align="center" width="33%">
 <h3>🔄 Sync State Tracking</h3>
@@ -53,7 +51,7 @@ Tag agents with a category and install entire groups at once. Keep your library 
 
 | Without apm | With apm |
 |---|---|
-| ❌ You copy-paste the same agent prompt into Claude Code, Cursor, and Codex separately — and they drift apart over time. | ✅ One source of truth in your library. Install to any tool with one command. |
+| ❌ You copy-paste the same agent prompt into multiple coding tools — and they drift apart over time. | ✅ One source of truth in your library. Install to supported runtimes with one command. |
 | ❌ You edit an agent directly in `~/.claude/agents/` and forget which version is canonical. | ✅ Library always wins. Runtime is treated as a deploy target, never the source. |
 | ❌ You have no idea which installed agents are outdated or missing after switching machines. | ✅ `apm list` shows sync state for every agent — in-sync, outdated, ready, or unmanaged. |
 | ❌ You accumulate random `.md` files in your agents directories with no record of where they came from. | ✅ Every installed file is stamped with `apm.id`, platform, and install timestamp. |
@@ -157,30 +155,33 @@ apm install --cat devtools
 
 ## Install target folders
 
-Agents install targets:
+The tables below list the targets `apm` currently manages and that were re-checked against current platform docs.
+
+Verified agent install targets:
 
 | Platform | Global target | Project target |
 |---|---|---|
 | `claude-code` | `~/.claude/agents/` | `.claude/agents/` |
-| `cursor` | `~/.cursor/agents/` | `.cursor/agents/` |
-| `codex` | `~/.codex/agents/` | `.codex/agents/` |
-| `gemini` | `~/.gemini/` | `.gemini/` |
-| `windsurf` | `~/.windsurf/rules/` | `.windsurf/rules/` |
-| `continue` | `~/.continue/rules/` | `.continue/rules/` |
+| `gemini` | `~/.gemini/agents/` | `.gemini/agents/` |
 | `agents-dir` | `~/.agents/` | `.agents/` |
-| `generic` | `~/Desktop/agents-export/` | n/a |
 
-Skills install targets:
+Verified skill install targets:
 
 | Platform | Global target | Project target | Behavior |
 |---|---|---|---|
 | `claude-code` | `~/.claude/skills/` | `.claude/skills/` | symlink skill dir |
 | `codex` | `~/.codex/skills/` | `.codex/skills/` | symlink skill dir |
-| `gemini` | `~/.gemini/skills/` | `.gemini/skills/` | symlink skill dir |
 | `windsurf` | `~/.codeium/windsurf/skills/` | `.windsurf/skills/` | symlink skill dir |
 | `agents-dir` | `~/.agents/skills/` | `.agents/skills/` | symlink skill dir |
 
-Skills are not installable for `cursor`, `continue`, or `generic` in the current implementation.
+`generic` currently means an export-only convenience target (`~/Desktop/agents-export/` by default), not a verified first-class platform integration.
+
+Coming soon:
+- `cursor`: official docs currently point to `.cursor/rules` and `AGENTS.md`, not a verified `.cursor/agents/` runtime.
+- `continue`: official docs currently point to `.continue/rules`, not a subagent runtime directory.
+- `codex` agents: current Codex docs emphasize `AGENTS.md` and skills; an `agents` runtime folder is not verified here yet.
+- `windsurf` agents: Windsurf exposes rules, skills, workflows, and `AGENTS.md`; `apm` does not yet model Windsurf rules as a first-class managed target.
+- `gemini` skills: Gemini CLI documents subagents in `.gemini/agents/`, but a SKILL.md-based skill runtime is not verified here yet.
 
 ## Install modes and direct symlinks
 
@@ -189,7 +190,7 @@ Skills are not installable for `cursor`, `continue`, or `generic` in the current
 - `install` with `INSTALL_MODE=symlink`:
   `apm` writes the generated runtime file into `~/.agents/` and symlinks the tool-specific runtime path back to that managed file. This keeps frontmatter like `apm.id`, `installed-at`, and deploy metadata intact.
 - `--mode skills install`:
-  `apm` creates a directory symlink from the selected platform skill target back to the canonical skill folder in `SKILLS_DB`.
+  `apm` creates a directory symlink from the selected verified skill target back to the canonical skill folder in `SKILLS_DB`.
 - `link` / `unlink`:
   `apm link <id>` creates a runtime symlink that points directly at the resolved split instruction body in your library. This is useful when you want runtime to follow the library body exactly without generating a runtime wrapper file.
 

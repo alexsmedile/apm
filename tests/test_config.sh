@@ -108,6 +108,23 @@ EOF
 }
 run_test "config: default platform is claude-code when not set" test_platform_default_is_claude_code
 
+test_legacy_gemini_md_alias_still_resolves_runtime() {
+    local cfgdir tmpdb out runtime_dir
+    cfgdir=$(mktemp -d)
+    tmpdb=$(mktemp -d)
+    cp -r "$FIXTURES/library-basic/." "$tmpdb/"
+    cat > "${cfgdir}/config.sh" <<EOF
+AGENTS_DB="$tmpdb"
+PLATFORM="gemini"
+GEMINI_MD="/tmp/legacy-gemini-agents"
+EOF
+    out=$(APM_CONFIG_DIR="$cfgdir" bash "$PROJECT_ROOT/apm" --json config 2>/dev/null)
+    runtime_dir=$(echo "$out" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('runtime_dir',''))" 2>/dev/null)
+    rm -rf "$cfgdir" "$tmpdb"
+    [ "$runtime_dir" = "/tmp/legacy-gemini-agents" ]
+}
+run_test "config: legacy GEMINI_MD alias still works for gemini runtime" test_legacy_gemini_md_alias_still_resolves_runtime
+
 # ---------------------------------------------------------------------------
 # Setup wizard: writes config file
 # ---------------------------------------------------------------------------
