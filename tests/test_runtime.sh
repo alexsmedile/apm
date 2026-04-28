@@ -137,6 +137,21 @@ test_install_creates_file() {
 }
 run_test "install: creates runtime file" test_install_creates_file
 
+test_install_project_dir_creates_project_runtime_file() {
+    local project_root base_dir
+    base_dir=$(mktemp -d)
+    project_root="$base_dir/project-alpha"
+
+    AGENTS_DB="$(realpath "$FIXTURES/library-basic")" \
+        bash "$PROJECT_ROOT/apm" --platform claude-code --project-dir "$project_root" install git-mentor > /dev/null 2>&1
+    local result=$?
+    local exists=0
+    [ -f "$project_root/.claude/agents/git-mentor.md" ] && exists=1
+    rm -rf "$base_dir"
+    [ $result -eq 0 ] && [ $exists -eq 1 ]
+}
+run_test "install: --project-dir writes into the target project runtime" test_install_project_dir_creates_project_runtime_file
+
 test_install_runtime_contract() {
     local tmprt
     tmprt=$(mktemp -d)
