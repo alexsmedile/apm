@@ -52,6 +52,7 @@ _CLI_DB=""
 _CLI_MODE=""
 _CLI_PLATFORM=""
 _CLI_INSTALL_MODE=""
+_CLI_PROJECT_DIR=""
 : "${APM_JSON_MODE:=0}"
 : "${APM_DRY_RUN:=0}"
 : "${APM_FORCE:=0}"
@@ -70,6 +71,9 @@ _apm_parse_global_flags() {
             --mode)
                 [ $# -lt 2 ] && apm_die 2 "--mode requires a value (agents|skills)"
                 _CLI_MODE="$2"; shift 2 ;;
+            --project-dir)
+                [ $# -lt 2 ] && apm_die 2 "--project-dir requires a value"
+                _CLI_PROJECT_DIR="$2"; shift 2 ;;
             --json)          APM_JSON_MODE=1; export APM_JSON_MODE; shift ;;
             --dry-run)       APM_DRY_RUN=1; export APM_DRY_RUN; shift ;;
             --force)         APM_FORCE=1; export APM_FORCE; shift ;;
@@ -112,6 +116,7 @@ cmd_setup() {
 
 cmd_init() {
     local target_plat="${APM_PLATFORM}"
+    local target_root="${APM_PROJECT_DIR:-.}"
     
     # Parse --platform if provided
     while [[ $# -gt 0 ]]; do
@@ -121,31 +126,17 @@ cmd_init() {
         esac
     done
 
+    local old_platform="${APM_PLATFORM}"
+    APM_PLATFORM="$target_plat"
     local local_dir=""
-    if [ "${APM_MODE}" = "skills" ]; then
-        case "$target_plat" in
-            claude-code) local_dir="./.claude/skills" ;;
-            codex)       local_dir="./.codex/skills" ;;
-            gemini)      apm_die 2 "Skill initialization is not yet supported for platform: $target_plat" ;;
-            windsurf)    local_dir="./.windsurf/skills" ;;
-            agents-dir)  local_dir="./.agents/skills" ;;
-            *)           apm_die 2 "Skill initialization not supported for platform: $target_plat" ;;
-        esac
-    else
-        case "$target_plat" in
-            claude-code) local_dir="./.claude/agents" ;;
-            cursor)      local_dir="./.cursor/agents" ;;
-            codex)       local_dir="./.codex/agents" ;;
-            gemini)      local_dir="./.gemini/agents" ;;
-            windsurf)    local_dir="./.windsurf/rules" ;;
-            continue)    local_dir="./.continue/rules" ;;
-            agents-dir)  local_dir="./.agents" ;;
-            *)           apm_die 2 "Initialization not supported for platform: $target_plat" ;;
-        esac
-    fi
+    local_dir="$(_apm_project_runtime_dir_for_root "$target_root")" || local_dir=""
+    APM_PLATFORM="$old_platform"
+
+    [ -z "$local_dir" ] && apm_die 2 "Initialization not supported for platform: $target_plat"
 
     echo ""
     echo "  Initializing project scope for platform: $target_plat"
+    [ "$target_root" != "." ] && echo "  Project root: $target_root"
     echo "  Target directory: $local_dir"
     echo ""
 
@@ -184,6 +175,7 @@ print(json.dumps({
     'skills_db':       '${APM_SKILLS_DB}',
     'platform':        '${APM_PLATFORM}',
     'scope':           '${APM_SCOPE}',
+    'project_dir':     '${APM_PROJECT_DIR}',
     'runtime_dir':     '${APM_RUNTIME_DIR}',
     'claude_agents':   '${APM_CLAUDE_AGENTS}',
     'cursor_agents':   '${APM_CURSOR_AGENTS}',
@@ -215,6 +207,7 @@ print(json.dumps({
     echo "  Default mode    : ${APM_DEFAULT_MODE}"
     echo "  Platform        : ${APM_PLATFORM}"
     echo "  Scope           : ${APM_SCOPE}"
+    [ -n "${APM_PROJECT_DIR}" ] && echo "  Project dir     : ${APM_PROJECT_DIR}"
     echo "  Active db       : ${APM_ACTIVE_DB:-<not set>}"
     echo "  Runtime dir     : ${APM_RUNTIME_DIR:-<not set>}"
     echo ""
@@ -3781,6 +3774,43 @@ cmd_tui() {
     python3 "${APM_LIB_PY}/apm_tui.py" --helper "${APM_LIB_PY}/apm_python.py"
 }
 
+cmd_rtui() {
+    if [ -z "$APM_ACTIVE_DB" ]; then
+        if [ ! -f "${APM_CONFIG_DIR}/config.sh" ]; then
+            echo ""
+            echo "No config found at ${APM_CONFIG_DIR}/config.sh"
+            echo ""
+            cmd_setup
+            apm_load_config
+            apm_apply_cli_overrides
+        else
+            apm_die 2 "No library path configured. Run: apm setup"
+        fi
+    fi
+
+    local _bin
+    _bin="${APM_SCRIPT_DIR}/lib/rust/apm-tui/target/release/apm-tui"
+    if [ ! -x "$_bin" ]; then
+        _bin="${APM_SCRIPT_DIR}/lib/rust/apm-tui/target/debug/apm-tui"
+    fi
+    if [ ! -x "$_bin" ]; then
+        apm_die 3 "apm-tui binary not found. Build it with: cd ${APM_SCRIPT_DIR}/lib/rust/apm-tui && cargo build --release"
+    fi
+
+    APM_TUI_MODE="${APM_MODE}" \
+    APM_TUI_DEFAULT_MODE="${APM_DEFAULT_MODE}" \
+    APM_TUI_AGENTS_DB="${APM_AGENTS_DB}" \
+    APM_TUI_SKILLS_DB="${APM_SKILLS_DB}" \
+    APM_TUI_PLATFORM="${APM_PLATFORM}" \
+    APM_TUI_SCOPE="${APM_SCOPE}" \
+    APM_TUI_RUNTIME_DIR="${APM_RUNTIME_DIR}" \
+    APM_TUI_AGENTS_GITHUB_MODE="${APM_GITHUB_MODE}" \
+    APM_TUI_SKILLS_GITHUB_MODE="${APM_SKILLS_GITHUB_MODE}" \
+    APM_PYTHON_HELPER="${APM_LIB_PY}/apm_python.py" \
+    APM_BIN="${APM_SCRIPT_DIR}/apm" \
+    exec "$_bin"
+}
+
 # ---------------------------------------------------------------------------
 # Main entrypoint
 # ---------------------------------------------------------------------------
@@ -3858,8 +3888,11 @@ main() {
         github)
             cmd_github "${_REMAINING_ARGS[@]:1}"
             ;;
-        tui)
+        tui|btui)
             cmd_tui
+            ;;
+        rtui)
+            cmd_rtui
             ;;
         version|--version|-V)
             echo "apm $APM_VERSION"
@@ -3875,6 +3908,7 @@ Global flags:
   --db <path>        Override library database path
   --mode <name>      Select mode (agents or skills)
   --platform <name>  Override platform (claude-code, cursor, codex, gemini, generic)
+  --project-dir <path>  Force project scope rooted at a specific folder
   --global, -g       Force global scope (ignore local .claude/ etc)
   --json             Machine-readable JSON output
   --dry-run          Show what would happen without doing it
@@ -3901,18 +3935,15 @@ Commands:
   unlink <id> [--project|--global|--all]           Remove symlink(s) for an agent
   links [id]                   List tracked symlinks (all agents or one)
   github <sub>                 GitHub sync (connect, status, diff, push, pull)
-  tui                          Launch the experimental Python TUI
+  btui                         Launch the bash/Python TUI (legacy fallback, alias: tui)
+  rtui                         Launch the Ratatui TUI (build first: cd lib/rust/apm-tui && cargo build --release)
   version                      Show apm version
 
 Run with no command for interactive mode.
 HELP
             ;;
         "")
-            if [ "${APM_EXPERIMENTAL_TUI:-0}" = "1" ]; then
-                cmd_tui
-            else
-                cmd_interactive
-            fi
+            cmd_rtui
             ;;
         *)
             apm_die 2 "Unknown command: $cmd. Run 'apm --help' for usage."

@@ -70,6 +70,14 @@ apm --mode skills --platform claude-code status
 apm --mode skills --platform claude-code list
 ```
 
+## First Time Setup
+
+```bash
+apm config
+```
+
+IMPORTAT FOR AGENTS: if this users's first time setup guide him into installing the apm tool correctly on his machine and setting up local database variables first. If already done, the first time setup step is not needed.
+
 ## Config and Resolution Rules
 
 - Precedence: `CLI flag > env var > config file > built-in default`

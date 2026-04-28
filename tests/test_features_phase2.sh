@@ -79,6 +79,23 @@ test_init_gemini_agents() {
 }
 run_test "init: creates .gemini/agents and detects project scope" test_init_gemini_agents
 
+test_project_dir_flag_forces_project_scope() {
+    local project_root
+    project_root=$(mktemp -d)/sample-project
+
+    local out
+    out=$(bash "$PROJECT_ROOT/apm" --platform claude-code --project-dir "$project_root" --json config)
+
+    local ok=1
+    assert_json_field "$out" "scope" "project" || ok=0
+    assert_json_field "$out" "project_dir" "$project_root" || ok=0
+    assert_json_field "$out" "runtime_dir" "$project_root/.claude/agents" || ok=0
+
+    rm -rf "${project_root%/sample-project}"
+    [ "$ok" -eq 1 ]
+}
+run_test "config: --project-dir forces project scope for explicit root" test_project_dir_flag_forces_project_scope
+
 # ---------------------------------------------------------------------------
 # ls -a (platform filtering)
 # ---------------------------------------------------------------------------

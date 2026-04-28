@@ -61,6 +61,51 @@ apm_resolve_active_mode() {
            APM_ACTIVE_KIND APM_ACTIVE_KIND_PLURAL
 }
 
+_apm_runtime_subpath() {
+    if [ "${APM_MODE:-agents}" = "skills" ]; then
+        case "$APM_PLATFORM" in
+            claude-code) echo ".claude/skills" ;;
+            codex)       echo ".codex/skills" ;;
+            gemini)      echo "" ;;
+            windsurf)    echo ".windsurf/skills" ;;
+            agents-dir)  echo ".agents/skills" ;;
+            *)           echo "" ;;
+        esac
+    else
+        case "$APM_PLATFORM" in
+            claude-code) echo ".claude/agents" ;;
+            cursor)      echo ".cursor/agents" ;;
+            codex)       echo ".codex/agents" ;;
+            gemini)      echo ".gemini/agents" ;;
+            windsurf)    echo ".windsurf/rules" ;;
+            continue)    echo ".continue/rules" ;;
+            agents-dir)  echo ".agents" ;;
+            *)           echo "" ;;
+        esac
+    fi
+}
+
+_apm_project_runtime_dir_for_root() {
+    local root="${1:-.}"
+    local subpath
+    subpath="$(_apm_runtime_subpath)"
+    [ -z "$subpath" ] && return 1
+
+    if [ "$root" = "." ]; then
+        printf "./%s\n" "$subpath"
+    else
+        local abs_root
+        if [ "${root#/}" != "$root" ]; then
+            abs_root="${root%/}"
+        elif [ -d "$root" ]; then
+            abs_root="$(cd "$root" 2>/dev/null && pwd -P)" || return 1
+        else
+            abs_root="$(pwd -P)/${root#./}"
+        fi
+        printf "%s/%s\n" "$abs_root" "$subpath"
+    fi
+}
+
 # Resolve runtime directory and scope for the current platform.
 # Handles global vs project scope detection.
 _apm_resolve_runtime_and_scope() {
@@ -92,24 +137,28 @@ _apm_resolve_runtime_and_scope() {
     APM_SCOPE="global"
     if [ "${APM_GLOBAL_FORCE:-0}" != "1" ]; then
         local _local_dir=""
-        if [ "${APM_MODE:-agents}" = "skills" ]; then
-            case "$APM_PLATFORM" in
-                claude-code) [ -d "./.claude/skills" ] && _local_dir="./.claude/skills" ;;
-                codex)       [ -d "./.codex/skills" ]  && _local_dir="./.codex/skills" ;;
-                gemini)      ;;
-                windsurf)    [ -d "./.windsurf/skills" ] && _local_dir="./.windsurf/skills" ;;
-                agents-dir)  [ -d "./.agents/skills" ] && _local_dir="./.agents/skills" ;;
-            esac
+        if [ -n "${APM_PROJECT_DIR:-}" ]; then
+            _local_dir="$(_apm_project_runtime_dir_for_root "$APM_PROJECT_DIR")" || _local_dir=""
         else
-            case "$APM_PLATFORM" in
-                claude-code) [ -d "./.claude/agents" ] && _local_dir="./.claude/agents" ;;
-                cursor)      [ -d "./.cursor/agents" ] && _local_dir="./.cursor/agents" ;;
-                codex)       [ -d "./.codex/agents" ]  && _local_dir="./.codex/agents" ;;
-                gemini)      [ -d "./.gemini/agents" ] && _local_dir="./.gemini/agents" ;;
-                windsurf)    [ -d "./.windsurf/rules" ] && _local_dir="./.windsurf/rules" ;;
-                continue)    [ -d "./.continue/rules" ] && _local_dir="./.continue/rules" ;;
-                agents-dir)  [ -d "./.agents" ]        && _local_dir="./.agents" ;;
-            esac
+            if [ "${APM_MODE:-agents}" = "skills" ]; then
+                case "$APM_PLATFORM" in
+                    claude-code) [ -d "./.claude/skills" ] && _local_dir="./.claude/skills" ;;
+                    codex)       [ -d "./.codex/skills" ]  && _local_dir="./.codex/skills" ;;
+                    gemini)      ;;
+                    windsurf)    [ -d "./.windsurf/skills" ] && _local_dir="./.windsurf/skills" ;;
+                    agents-dir)  [ -d "./.agents/skills" ] && _local_dir="./.agents/skills" ;;
+                esac
+            else
+                case "$APM_PLATFORM" in
+                    claude-code) [ -d "./.claude/agents" ] && _local_dir="./.claude/agents" ;;
+                    cursor)      [ -d "./.cursor/agents" ] && _local_dir="./.cursor/agents" ;;
+                    codex)       [ -d "./.codex/agents" ]  && _local_dir="./.codex/agents" ;;
+                    gemini)      [ -d "./.gemini/agents" ] && _local_dir="./.gemini/agents" ;;
+                    windsurf)    [ -d "./.windsurf/rules" ] && _local_dir="./.windsurf/rules" ;;
+                    continue)    [ -d "./.continue/rules" ] && _local_dir="./.continue/rules" ;;
+                    agents-dir)  [ -d "./.agents" ]        && _local_dir="./.agents" ;;
+                esac
+            fi
         fi
 
         if [ -n "$_local_dir" ]; then
@@ -169,6 +218,7 @@ apm_load_config() {
     APM_SKILLS_GITHUB_BRANCH="${_APM_DEFAULT_GITHUB_BRANCH}"
     APM_AGENTS_DB=""
     APM_SKILLS_DB=""
+    APM_PROJECT_DIR="${APM_PROJECT_DIR:-}"
     APM_MODE="${_APM_DEFAULT_MODE}"
 
     # Load config file if present
@@ -231,7 +281,7 @@ apm_load_config() {
 
     export APM_DEFAULT_MODE APM_MODE APM_AGENTS_DB APM_SKILLS_DB APM_PLATFORM APM_CLAUDE_AGENTS APM_CURSOR_AGENTS \
            APM_CODEX_AGENTS APM_GEMINI_AGENTS APM_WINDSURF_RULES APM_CONTINUE_RULES \
-           APM_AGENTS_DIR APM_INSTALL_MODE APM_GENERIC_EXPORT APM_GITHUB_MODE \
+           APM_AGENTS_DIR APM_INSTALL_MODE APM_GENERIC_EXPORT APM_PROJECT_DIR APM_GITHUB_MODE \
            APM_GITHUB_OWNER APM_GITHUB_MONOREPO APM_GITHUB_BRANCH \
            APM_SKILLS_GITHUB_MODE APM_SKILLS_GITHUB_OWNER \
            APM_SKILLS_GITHUB_MONOREPO APM_SKILLS_GITHUB_BRANCH
@@ -250,12 +300,13 @@ apm_apply_cli_overrides() {
     fi
     [ -n "${_CLI_PLATFORM:-}" ]     && APM_PLATFORM="${_CLI_PLATFORM}"
     [ -n "${_CLI_INSTALL_MODE:-}" ] && APM_INSTALL_MODE="${_CLI_INSTALL_MODE}"
+    [ -n "${_CLI_PROJECT_DIR:-}" ]  && APM_PROJECT_DIR="${_CLI_PROJECT_DIR}"
     
     # Re-resolve runtime and scope after platform override
     _apm_resolve_runtime_and_scope
     apm_resolve_active_mode
 
-    export APM_MODE APM_AGENTS_DB APM_SKILLS_DB APM_PLATFORM
+    export APM_MODE APM_AGENTS_DB APM_SKILLS_DB APM_PLATFORM APM_PROJECT_DIR
 }
 
 _apm_setup_prompt_mode() {
