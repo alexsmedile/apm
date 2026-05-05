@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.2.0] — 2026-05-06
+
+### Added
+- Skills install output now shows a `Scope` line (global vs project-local) and the resolved runtime directory, so installs are always traceable without a follow-up `apm config` check.
+- Skills runtime paths for `claude-code`, `codex`, and `windsurf` are now configurable variables (`CLAUDE_SKILLS`, `CODEX_SKILLS`, `WINDSURF_SKILLS`) in `~/.config/apm/config.sh`, following the same override pattern as agent paths.
+- Agent onboarding steps added to `AGENTS.md` / `CLAUDE.md` so agents bootstrapping the repo self-configure correctly.
+- Multi-platform skills install: `-p cc,agt install <id>` installs to each platform in a single command.
+
+### Fixed
+- Codex skills runtime corrected to `~/.agents/skills/` (global) and `.agents/skills/` (project-local). The previous target (`~/.codex/skills/`) is not where Codex reads skills from.
+
+---
+
 ## [0.1.0] — 2026-04-08
 
 Initial public release.

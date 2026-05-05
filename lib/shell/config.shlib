@@ -23,6 +23,9 @@ _APM_DEFAULT_WINDSURF_RULES="${HOME}/.windsurf/rules"
 _APM_DEFAULT_CONTINUE_RULES="${HOME}/.continue/rules"
 _APM_DEFAULT_AGENTS_DIR="${HOME}/.agents"
 _APM_DEFAULT_GENERIC_EXPORT="${HOME}/Desktop/agents-export"
+_APM_DEFAULT_CLAUDE_SKILLS="${HOME}/.claude/skills"
+_APM_DEFAULT_CODEX_SKILLS="${HOME}/.agents/skills"
+_APM_DEFAULT_WINDSURF_SKILLS="${HOME}/.codeium/windsurf/skills"
 _APM_DEFAULT_GITHUB_BRANCH="main"
 
 _apm_platform_supports_skills() {
@@ -94,7 +97,7 @@ _apm_runtime_subpath() {
     if [ "${APM_MODE:-agents}" = "skills" ]; then
         case "$APM_PLATFORM" in
             claude-code) echo ".claude/skills" ;;
-            codex)       echo ".codex/skills" ;;
+            codex)       echo ".agents/skills" ;;
             gemini)      echo "" ;;
             windsurf)    echo ".windsurf/skills" ;;
             agents-dir)  echo ".agents/skills" ;;
@@ -141,10 +144,10 @@ _apm_resolve_runtime_and_scope() {
     # 1. Start with the "global" path for the selected platform
     if [ "${APM_MODE:-agents}" = "skills" ]; then
         case "$APM_PLATFORM" in
-            claude-code) APM_RUNTIME_DIR="${HOME}/.claude/skills" ;;
-            codex)       APM_RUNTIME_DIR="${HOME}/.codex/skills" ;;
+            claude-code) APM_RUNTIME_DIR="${APM_CLAUDE_SKILLS}" ;;
+            codex)       APM_RUNTIME_DIR="${APM_CODEX_SKILLS}" ;;
             gemini)      APM_RUNTIME_DIR="" ;;
-            windsurf)    APM_RUNTIME_DIR="${HOME}/.codeium/windsurf/skills" ;;
+            windsurf)    APM_RUNTIME_DIR="${APM_WINDSURF_SKILLS}" ;;
             agents-dir)  APM_RUNTIME_DIR="${APM_AGENTS_DIR}/skills" ;;
             *)           APM_RUNTIME_DIR="" ;;
         esac
@@ -172,7 +175,7 @@ _apm_resolve_runtime_and_scope() {
             if [ "${APM_MODE:-agents}" = "skills" ]; then
                 case "$APM_PLATFORM" in
                     claude-code) [ -d "./.claude/skills" ] && _local_dir="./.claude/skills" ;;
-                    codex)       [ -d "./.codex/skills" ]  && _local_dir="./.codex/skills" ;;
+                    codex)       [ -d "./.agents/skills" ] && _local_dir="./.agents/skills" ;;
                     gemini)      ;;
                     windsurf)    [ -d "./.windsurf/skills" ] && _local_dir="./.windsurf/skills" ;;
                     agents-dir)  [ -d "./.agents/skills" ] && _local_dir="./.agents/skills" ;;
@@ -214,6 +217,9 @@ apm_load_config() {
     _APM_ENV_WINDSURF_RULES="${WINDSURF_RULES:-}"
     _APM_ENV_CONTINUE_RULES="${CONTINUE_RULES:-}"
     _APM_ENV_AGENTS_DIR="${AGENTS_DIR:-}"
+    _APM_ENV_CLAUDE_SKILLS="${CLAUDE_SKILLS:-}"
+    _APM_ENV_CODEX_SKILLS="${CODEX_SKILLS:-}"
+    _APM_ENV_WINDSURF_SKILLS="${WINDSURF_SKILLS:-}"
     _APM_ENV_INSTALL_MODE="${INSTALL_MODE:-}"
     _APM_ENV_DEFAULT_PLATFORMS="${DEFAULT_PLATFORMS:-}"
     _APM_ENV_GENERIC_EXPORT="${GENERIC_EXPORT:-}"
@@ -236,6 +242,9 @@ apm_load_config() {
     APM_WINDSURF_RULES="${_APM_DEFAULT_WINDSURF_RULES}"
     APM_CONTINUE_RULES="${_APM_DEFAULT_CONTINUE_RULES}"
     APM_AGENTS_DIR="${_APM_DEFAULT_AGENTS_DIR}"
+    APM_CLAUDE_SKILLS="${_APM_DEFAULT_CLAUDE_SKILLS}"
+    APM_CODEX_SKILLS="${_APM_DEFAULT_CODEX_SKILLS}"
+    APM_WINDSURF_SKILLS="${_APM_DEFAULT_WINDSURF_SKILLS}"
     APM_INSTALL_MODE="${_APM_DEFAULT_INSTALL_MODE}"
     APM_DEFAULT_PLATFORMS="${_APM_DEFAULT_PLATFORMS}"
     APM_GENERIC_EXPORT="${_APM_DEFAULT_GENERIC_EXPORT}"
@@ -269,6 +278,9 @@ apm_load_config() {
         [ -n "${WINDSURF_RULES:-}" ]  && APM_WINDSURF_RULES="${WINDSURF_RULES}"
         [ -n "${CONTINUE_RULES:-}" ]  && APM_CONTINUE_RULES="${CONTINUE_RULES}"
         [ -n "${AGENTS_DIR:-}" ]      && APM_AGENTS_DIR="${AGENTS_DIR}"
+        [ -n "${CLAUDE_SKILLS:-}" ]   && APM_CLAUDE_SKILLS="${CLAUDE_SKILLS}"
+        [ -n "${CODEX_SKILLS:-}" ]    && APM_CODEX_SKILLS="${CODEX_SKILLS}"
+        [ -n "${WINDSURF_SKILLS:-}" ] && APM_WINDSURF_SKILLS="${WINDSURF_SKILLS}"
         [ -n "${INSTALL_MODE:-}" ]       && APM_INSTALL_MODE="${INSTALL_MODE}"
         [ -n "${DEFAULT_PLATFORMS:-}" ]  && APM_DEFAULT_PLATFORMS="${DEFAULT_PLATFORMS}"
         [ -n "${GENERIC_EXPORT:-}" ]     && APM_GENERIC_EXPORT="${GENERIC_EXPORT}"
@@ -295,6 +307,9 @@ apm_load_config() {
     [ -n "${_APM_ENV_WINDSURF_RULES:-}" ]   && APM_WINDSURF_RULES="${_APM_ENV_WINDSURF_RULES}"
     [ -n "${_APM_ENV_CONTINUE_RULES:-}" ]   && APM_CONTINUE_RULES="${_APM_ENV_CONTINUE_RULES}"
     [ -n "${_APM_ENV_AGENTS_DIR:-}" ]       && APM_AGENTS_DIR="${_APM_ENV_AGENTS_DIR}"
+    [ -n "${_APM_ENV_CLAUDE_SKILLS:-}" ]    && APM_CLAUDE_SKILLS="${_APM_ENV_CLAUDE_SKILLS}"
+    [ -n "${_APM_ENV_CODEX_SKILLS:-}" ]     && APM_CODEX_SKILLS="${_APM_ENV_CODEX_SKILLS}"
+    [ -n "${_APM_ENV_WINDSURF_SKILLS:-}" ]  && APM_WINDSURF_SKILLS="${_APM_ENV_WINDSURF_SKILLS}"
     [ -n "${_APM_ENV_INSTALL_MODE:-}" ]       && APM_INSTALL_MODE="${_APM_ENV_INSTALL_MODE}"
     [ -n "${_APM_ENV_DEFAULT_PLATFORMS:-}" ] && APM_DEFAULT_PLATFORMS="${_APM_ENV_DEFAULT_PLATFORMS}"
     [ -n "${_APM_ENV_GENERIC_EXPORT:-}" ]    && APM_GENERIC_EXPORT="${_APM_ENV_GENERIC_EXPORT}"
@@ -315,7 +330,9 @@ apm_load_config() {
     export APM_DEFAULT_MODE APM_MODE APM_AGENTS_DB APM_SKILLS_DB APM_PLATFORM APM_DEFAULT_PLATFORMS \
            APM_CLAUDE_AGENTS APM_CURSOR_AGENTS \
            APM_CODEX_AGENTS APM_GEMINI_AGENTS APM_WINDSURF_RULES APM_CONTINUE_RULES \
-           APM_AGENTS_DIR APM_INSTALL_MODE APM_GENERIC_EXPORT APM_PROJECT_DIR APM_GITHUB_MODE \
+           APM_AGENTS_DIR APM_INSTALL_MODE APM_GENERIC_EXPORT APM_PROJECT_DIR \
+           APM_CLAUDE_SKILLS APM_CODEX_SKILLS APM_WINDSURF_SKILLS \
+           APM_GITHUB_MODE \
            APM_GITHUB_OWNER APM_GITHUB_MONOREPO APM_GITHUB_BRANCH \
            APM_SKILLS_GITHUB_MODE APM_SKILLS_GITHUB_OWNER \
            APM_SKILLS_GITHUB_MONOREPO APM_SKILLS_GITHUB_BRANCH
@@ -602,6 +619,9 @@ GEMINI_AGENTS="\${HOME}/.gemini/agents"
 WINDSURF_RULES="\${HOME}/.windsurf/rules"
 CONTINUE_RULES="\${HOME}/.continue/rules"
 AGENTS_DIR="\${HOME}/.agents"
+CLAUDE_SKILLS="\${HOME}/.claude/skills"
+CODEX_SKILLS="\${HOME}/.agents/skills"
+WINDSURF_SKILLS="\${HOME}/.codeium/windsurf/skills"
 GENERIC_EXPORT="\${HOME}/Desktop/agents-export"
 GITHUB_MODE="${_github_mode}"
 GITHUB_OWNER="${_github_owner}"
