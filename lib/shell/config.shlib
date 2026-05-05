@@ -11,7 +11,8 @@ _APM_CONFIG_FILE="${APM_CONFIG_DIR}/config.sh"
 # Built-in defaults
 _APM_DEFAULT_MODE="agents"
 _APM_DEFAULT_PLATFORM="agents-dir"
-_APM_DEFAULT_INSTALL_MODE="copy"
+_APM_DEFAULT_PLATFORMS="agents-dir"
+_APM_DEFAULT_INSTALL_MODE="symlink"
 _APM_DEFAULT_AGENTS_DB="${HOME}/agents_db"
 _APM_DEFAULT_SKILLS_DB="${HOME}/skills_db"
 _APM_DEFAULT_CLAUDE_AGENTS="${HOME}/.claude/agents"
@@ -29,6 +30,34 @@ _apm_platform_supports_skills() {
         claude-code|codex|gemini|windsurf|agents-dir) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+# Expand a platform shorthand or full name to its canonical name.
+# Accepts: cc, crs, cdx, gmn, wds, cnt, agt, gen — or any full name unchanged.
+_apm_expand_platform() {
+    case "${1:-}" in
+        cc)          echo "claude-code" ;;
+        crs)         echo "cursor" ;;
+        cdx)         echo "codex" ;;
+        gmn)         echo "gemini" ;;
+        wds)         echo "windsurf" ;;
+        cnt)         echo "continue" ;;
+        agt)         echo "agents-dir" ;;
+        gen)         echo "generic" ;;
+        *)           echo "${1:-}" ;;
+    esac
+}
+
+# Expand a comma-separated platform list, resolving shorthands.
+# Prints canonical names, one per line.
+_apm_expand_platforms() {
+    local input="$1"
+    local IFS=','
+    local p
+    for p in $input; do
+        p="${p// /}"  # strip spaces
+        [ -n "$p" ] && _apm_expand_platform "$p"
+    done
 }
 
 apm_resolve_active_mode() {
@@ -186,6 +215,7 @@ apm_load_config() {
     _APM_ENV_CONTINUE_RULES="${CONTINUE_RULES:-}"
     _APM_ENV_AGENTS_DIR="${AGENTS_DIR:-}"
     _APM_ENV_INSTALL_MODE="${INSTALL_MODE:-}"
+    _APM_ENV_DEFAULT_PLATFORMS="${DEFAULT_PLATFORMS:-}"
     _APM_ENV_GENERIC_EXPORT="${GENERIC_EXPORT:-}"
     _APM_ENV_GITHUB_MODE="${GITHUB_MODE:-}"
     _APM_ENV_GITHUB_OWNER="${GITHUB_OWNER:-}"
@@ -207,6 +237,7 @@ apm_load_config() {
     APM_CONTINUE_RULES="${_APM_DEFAULT_CONTINUE_RULES}"
     APM_AGENTS_DIR="${_APM_DEFAULT_AGENTS_DIR}"
     APM_INSTALL_MODE="${_APM_DEFAULT_INSTALL_MODE}"
+    APM_DEFAULT_PLATFORMS="${_APM_DEFAULT_PLATFORMS}"
     APM_GENERIC_EXPORT="${_APM_DEFAULT_GENERIC_EXPORT}"
     APM_GITHUB_MODE=""
     APM_GITHUB_OWNER=""
@@ -238,8 +269,9 @@ apm_load_config() {
         [ -n "${WINDSURF_RULES:-}" ]  && APM_WINDSURF_RULES="${WINDSURF_RULES}"
         [ -n "${CONTINUE_RULES:-}" ]  && APM_CONTINUE_RULES="${CONTINUE_RULES}"
         [ -n "${AGENTS_DIR:-}" ]      && APM_AGENTS_DIR="${AGENTS_DIR}"
-        [ -n "${INSTALL_MODE:-}" ]    && APM_INSTALL_MODE="${INSTALL_MODE}"
-        [ -n "${GENERIC_EXPORT:-}" ]  && APM_GENERIC_EXPORT="${GENERIC_EXPORT}"
+        [ -n "${INSTALL_MODE:-}" ]       && APM_INSTALL_MODE="${INSTALL_MODE}"
+        [ -n "${DEFAULT_PLATFORMS:-}" ]  && APM_DEFAULT_PLATFORMS="${DEFAULT_PLATFORMS}"
+        [ -n "${GENERIC_EXPORT:-}" ]     && APM_GENERIC_EXPORT="${GENERIC_EXPORT}"
         [ -n "${GITHUB_MODE:-}" ]     && APM_GITHUB_MODE="${GITHUB_MODE}"
         [ -n "${GITHUB_OWNER:-}" ]    && APM_GITHUB_OWNER="${GITHUB_OWNER}"
         [ -n "${GITHUB_MONOREPO:-}" ] && APM_GITHUB_MONOREPO="${GITHUB_MONOREPO}"
@@ -263,8 +295,9 @@ apm_load_config() {
     [ -n "${_APM_ENV_WINDSURF_RULES:-}" ]   && APM_WINDSURF_RULES="${_APM_ENV_WINDSURF_RULES}"
     [ -n "${_APM_ENV_CONTINUE_RULES:-}" ]   && APM_CONTINUE_RULES="${_APM_ENV_CONTINUE_RULES}"
     [ -n "${_APM_ENV_AGENTS_DIR:-}" ]       && APM_AGENTS_DIR="${_APM_ENV_AGENTS_DIR}"
-    [ -n "${_APM_ENV_INSTALL_MODE:-}" ]     && APM_INSTALL_MODE="${_APM_ENV_INSTALL_MODE}"
-    [ -n "${_APM_ENV_GENERIC_EXPORT:-}" ]   && APM_GENERIC_EXPORT="${_APM_ENV_GENERIC_EXPORT}"
+    [ -n "${_APM_ENV_INSTALL_MODE:-}" ]       && APM_INSTALL_MODE="${_APM_ENV_INSTALL_MODE}"
+    [ -n "${_APM_ENV_DEFAULT_PLATFORMS:-}" ] && APM_DEFAULT_PLATFORMS="${_APM_ENV_DEFAULT_PLATFORMS}"
+    [ -n "${_APM_ENV_GENERIC_EXPORT:-}" ]    && APM_GENERIC_EXPORT="${_APM_ENV_GENERIC_EXPORT}"
     [ -n "${_APM_ENV_GITHUB_MODE:-}" ]      && APM_GITHUB_MODE="${_APM_ENV_GITHUB_MODE}"
     [ -n "${_APM_ENV_GITHUB_OWNER:-}" ]     && APM_GITHUB_OWNER="${_APM_ENV_GITHUB_OWNER}"
     [ -n "${_APM_ENV_GITHUB_MONOREPO:-}" ]  && APM_GITHUB_MONOREPO="${_APM_ENV_GITHUB_MONOREPO}"
@@ -279,7 +312,8 @@ apm_load_config() {
     _apm_resolve_runtime_and_scope
     apm_resolve_active_mode
 
-    export APM_DEFAULT_MODE APM_MODE APM_AGENTS_DB APM_SKILLS_DB APM_PLATFORM APM_CLAUDE_AGENTS APM_CURSOR_AGENTS \
+    export APM_DEFAULT_MODE APM_MODE APM_AGENTS_DB APM_SKILLS_DB APM_PLATFORM APM_DEFAULT_PLATFORMS \
+           APM_CLAUDE_AGENTS APM_CURSOR_AGENTS \
            APM_CODEX_AGENTS APM_GEMINI_AGENTS APM_WINDSURF_RULES APM_CONTINUE_RULES \
            APM_AGENTS_DIR APM_INSTALL_MODE APM_GENERIC_EXPORT APM_PROJECT_DIR APM_GITHUB_MODE \
            APM_GITHUB_OWNER APM_GITHUB_MONOREPO APM_GITHUB_BRANCH \
@@ -298,15 +332,20 @@ apm_apply_cli_overrides() {
             APM_AGENTS_DB="${_CLI_DB}"
         fi
     fi
-    [ -n "${_CLI_PLATFORM:-}" ]     && APM_PLATFORM="${_CLI_PLATFORM}"
+    if [ -n "${_CLI_PLATFORM:-}" ]; then
+        # -p overrides the whole default-platforms set for this invocation
+        APM_DEFAULT_PLATFORMS="${_CLI_PLATFORM}"
+        # APM_PLATFORM = first entry (used by single-platform commands)
+        APM_PLATFORM=$(_apm_expand_platform "$(echo "${_CLI_PLATFORM}" | cut -d',' -f1 | tr -d ' ')")
+    fi
     [ -n "${_CLI_INSTALL_MODE:-}" ] && APM_INSTALL_MODE="${_CLI_INSTALL_MODE}"
     [ -n "${_CLI_PROJECT_DIR:-}" ]  && APM_PROJECT_DIR="${_CLI_PROJECT_DIR}"
-    
+
     # Re-resolve runtime and scope after platform override
     _apm_resolve_runtime_and_scope
     apm_resolve_active_mode
 
-    export APM_MODE APM_AGENTS_DB APM_SKILLS_DB APM_PLATFORM APM_PROJECT_DIR
+    export APM_MODE APM_AGENTS_DB APM_SKILLS_DB APM_PLATFORM APM_DEFAULT_PLATFORMS APM_PROJECT_DIR
 }
 
 _apm_setup_prompt_mode() {
@@ -352,26 +391,37 @@ _apm_setup_prompt_platform() {
     done
 }
 
+_apm_setup_prompt_default_platforms() {
+    local current="${1:-agents-dir}"
+    local answer=""
+    echo "Default install platforms (comma-separated list):" >&2
+    echo "  Shorthands: cc=claude-code  crs=cursor  cdx=codex  gmn=gemini  wds=windsurf  cnt=continue  agt=agents-dir  gen=generic" >&2
+    echo "  Example: claude-code,agents-dir" >&2
+    printf "Platforms [%s]: " "$current" >&2
+    read -r answer
+    answer="${answer:-$current}"
+    # Expand shorthands and re-join
+    local expanded
+    expanded=$(echo "$answer" | tr ',' '\n' | while IFS= read -r p; do
+        p="${p// /}"
+        [ -n "$p" ] && _apm_expand_platform "$p"
+    done | paste -sd ',' -)
+    echo "$expanded"
+}
+
 _apm_setup_prompt_install_mode() {
-    local platform="$1"
-    local current="${2:-copy}"
+    local current="${2:-symlink}"
     local answer=""
     echo "Install mode:" >&2
-    echo "  1) copy    — write independent file to each platform dir (default)" >&2
-    echo "  2) symlink — link platform dirs back to ~/.agents/" >&2
-    while true; do
-        if [ "$platform" = "agents-dir" ]; then
-            printf "Choice [1-2] (%s; symlink recommended when using agents-dir): " "$current" >&2
-        else
-            printf "Choice [1-2] (%s): " "$current" >&2
-        fi
-        read -r answer
-        case "${answer:-$current}" in
-            1|copy) echo "copy"; return 0 ;;
-            2|symlink) echo "symlink"; return 0 ;;
-            *) echo "Please choose 'copy' or 'symlink'." >&2 ;;
-        esac
-    done
+    echo "  1) symlink — link platform dirs back to ~/.agents/ (recommended)" >&2
+    echo "  2) copy    — write independent file to each platform dir" >&2
+    printf "Choice [1-2] (%s): " "$current" >&2
+    read -r answer
+    case "${answer:-$current}" in
+        1|symlink) echo "symlink"; return 0 ;;
+        2|copy)    echo "copy"; return 0 ;;
+        *)         echo "symlink"; return 0 ;;
+    esac
 }
 
 _apm_setup_prompt_github_section() {
@@ -468,6 +518,7 @@ apm_setup_wizard() {
     local _current_skills_db="${APM_SKILLS_DB:-${_APM_DEFAULT_SKILLS_DB}}"
     local _current_default_mode="${APM_DEFAULT_MODE:-${_APM_DEFAULT_MODE}}"
     local _current_platform="${APM_PLATFORM:-${_APM_DEFAULT_PLATFORM}}"
+    local _current_default_platforms="${APM_DEFAULT_PLATFORMS:-${_APM_DEFAULT_PLATFORMS}}"
     local _current_install_mode="${APM_INSTALL_MODE:-${_APM_DEFAULT_INSTALL_MODE}}"
 
     printf "Agents database path [%s]: " "$_current_agents_db"
@@ -482,6 +533,7 @@ apm_setup_wizard() {
 
     _default_mode=$(_apm_setup_prompt_mode "$_current_default_mode")
     _platform=$(_apm_setup_prompt_platform "$_current_platform")
+    _default_platforms=$(_apm_setup_prompt_default_platforms "$_current_default_platforms")
     _install_mode=$(_apm_setup_prompt_install_mode "$_platform" "$_current_install_mode")
 
     local _agent_github _skills_github
@@ -505,11 +557,12 @@ apm_setup_wizard() {
 
     echo ""
     echo "Review configuration:"
-    echo "  Default mode    : ${_default_mode}"
-    echo "  Agents db       : ${_db}"
-    echo "  Skills db       : ${_skills_db}"
-    echo "  Platform        : ${_platform}"
-    echo "  Install mode    : ${_install_mode}"
+    echo "  Default mode      : ${_default_mode}"
+    echo "  Agents db         : ${_db}"
+    echo "  Skills db         : ${_skills_db}"
+    echo "  Platform          : ${_platform}"
+    echo "  Default platforms : ${_default_platforms}"
+    echo "  Install mode      : ${_install_mode}"
     echo "  Agents GitHub   : ${_github_mode:-disabled} / ${_github_owner:-<none>}"
     [ -n "${_github_monorepo:-}" ] && echo "  Agents repo     : ${_github_monorepo}"
     echo "  Agents branch   : ${_github_branch:-${_APM_DEFAULT_GITHUB_BRANCH}}"
@@ -540,6 +593,7 @@ AGENTS_DB="${_db}"
 SKILLS_DB="${_skills_db}"
 DEFAULT_MODE="${_default_mode}"
 PLATFORM="${_platform}"
+DEFAULT_PLATFORMS="${_default_platforms}"
 INSTALL_MODE="${_install_mode}"
 CLAUDE_AGENTS="\${HOME}/.claude/agents"
 CURSOR_AGENTS="\${HOME}/.cursor/agents"

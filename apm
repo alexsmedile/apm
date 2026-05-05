@@ -65,18 +65,20 @@ _apm_parse_global_flags() {
             --db)
                 [ $# -lt 2 ] && apm_die 2 "--db requires a value"
                 _CLI_DB="$2"; shift 2 ;;
-            --platform)
-                [ $# -lt 2 ] && apm_die 2 "--platform requires a value"
+            --platform|-p)
+                [ $# -lt 2 ] && apm_die 2 "${1} requires a value"
                 _CLI_PLATFORM="$2"; shift 2 ;;
             --mode)
                 [ $# -lt 2 ] && apm_die 2 "--mode requires a value (agents|skills)"
                 _CLI_MODE="$2"; shift 2 ;;
-            --project-dir)
-                [ $# -lt 2 ] && apm_die 2 "--project-dir requires a value"
+            --skills|-s)     _CLI_MODE="skills"; shift ;;
+            --agents|-a)     _CLI_MODE="agents"; shift ;;
+            --cwd|--project-dir)
+                [ $# -lt 2 ] && apm_die 2 "${1} requires a value"
                 _CLI_PROJECT_DIR="$2"; shift 2 ;;
-            --json)          APM_JSON_MODE=1; export APM_JSON_MODE; shift ;;
+            --json|-j)       APM_JSON_MODE=1; export APM_JSON_MODE; shift ;;
             --dry-run)       APM_DRY_RUN=1; export APM_DRY_RUN; shift ;;
-            --force)         APM_FORCE=1; export APM_FORCE; shift ;;
+            --force|-f)      APM_FORCE=1; export APM_FORCE; shift ;;
             --global|-g)     APM_GLOBAL_FORCE=1; export APM_GLOBAL_FORCE; shift ;;
             --install-mode)
                 [ $# -lt 2 ] && apm_die 2 "--install-mode requires a value (copy|symlink)"
@@ -185,6 +187,7 @@ print(json.dumps({
     'continue_rules':  '${APM_CONTINUE_RULES}',
     'agents_dir':      '${APM_AGENTS_DIR}',
     'install_mode':    '${APM_INSTALL_MODE}',
+    'default_platforms': '${APM_DEFAULT_PLATFORMS}',
     'generic_export':  '${APM_GENERIC_EXPORT}',
     'github_mode':     '${APM_GITHUB_MODE}',
     'github_owner':    '${APM_GITHUB_OWNER}',
@@ -222,6 +225,7 @@ print(json.dumps({
     echo "  Continue rules  : ${APM_CONTINUE_RULES}"
     echo "  Agents dir      : ${APM_AGENTS_DIR}"
     echo "  Install mode    : ${APM_INSTALL_MODE}"
+    echo "  Dflt platforms  : ${APM_DEFAULT_PLATFORMS}"
     echo "  Generic export  : ${APM_GENERIC_EXPORT}"
     echo ""
     echo "  Agents GitHub   : ${APM_GITHUB_MODE:-disabled} / ${APM_GITHUB_OWNER:-<none>}"
@@ -528,6 +532,354 @@ print(f\"  Summary: {len([a for a in agents if a.get('state',{}).get('sync')=='o
     echo ""
 }
 
+cmd_scan_external() {
+    _apm_require_skills_mode "scan"
+
+    if [ -z "$APM_SKILLS_DB" ]; then
+        apm_die 2 "No skills library path configured. Run: apm setup"
+    fi
+
+    # Collect --dir flags; fall back to APM_SCAN_DIRS env, then ~/code/tools
+    local scan_dirs=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dir|-d) [ $# -lt 2 ] && apm_die 2 "--dir requires a value"; scan_dirs+=("$2"); shift 2 ;;
+            --max-depth) local _max_depth="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    if [ ${#scan_dirs[@]} -eq 0 ]; then
+        if [ -n "${APM_SCAN_DIRS:-}" ]; then
+            IFS=':' read -ra scan_dirs <<< "$APM_SCAN_DIRS"
+        else
+            scan_dirs=("$HOME/code/tools")
+        fi
+    fi
+
+    local dirs_csv
+    dirs_csv=$(IFS=','; echo "${scan_dirs[*]}")
+    local max_depth="${_max_depth:-6}"
+
+    local out
+    out=$(_apm_py scan-external-skills \
+        --scan-dirs "$dirs_csv" \
+        --db "$APM_SKILLS_DB" \
+        --max-depth "$max_depth")
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        echo "$out"
+        return 0
+    fi
+
+    echo ""
+    printf "  %-14s : %s\n" "Mode" "skills / scan"
+    printf "  %-14s : %s\n" "Scan dirs" "$dirs_csv"
+    printf "  %-14s : %s\n" "Skills DB" "$APM_SKILLS_DB"
+    echo ""
+
+    echo "$out" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+results = data.get('results', [])
+summary = data.get('summary', {})
+
+tty = sys.stdout.isatty()
+C = {
+    'green':  '\033[32m'  if tty else '',
+    'yellow': '\033[33m'  if tty else '',
+    'cyan':   '\033[36m'  if tty else '',
+    'dim':    '\033[2m'   if tty else '',
+    'bold':   '\033[1m'   if tty else '',
+    'reset':  '\033[0m'   if tty else '',
+}
+
+STATUS_SYM = {
+    'unmanaged':      ('  ○', C['cyan']),
+    'managed-copy':   ('  ~', C['yellow']),
+    'managed-symlink':('  ⤷', C['green']),
+}
+
+if not results:
+    print('  No SKILL.md files found in scan dirs.')
+else:
+    unmanaged   = [r for r in results if r['db_status'] == 'unmanaged']
+    copies      = [r for r in results if r['db_status'] == 'managed-copy']
+    symlinked   = [r for r in results if r['db_status'] == 'managed-symlink']
+
+    sections = [
+        ('Unmanaged (not in skills DB)', unmanaged),
+        ('Managed as copy (could be symlink)', copies),
+        ('Managed as symlink', symlinked),
+    ]
+    for heading, items in sections:
+        if not items:
+            continue
+        print(f'  {C[\"bold\"]}{heading}{C[\"reset\"]}')
+        for r in items:
+            sym, col = STATUS_SYM.get(r['db_status'], ('  ?', ''))
+            cid  = r['candidate_id']
+            tool = r['source_tool']
+            amb  = ' (ambiguous id)' if r.get('ambiguous') else ''
+            name = r.get('name') or ''
+            match = f'  -> db:{r[\"db_match_id\"]}' if r.get('db_match_id') else ''
+            label = name if name and name != cid else ''
+            label_str = f'  {C[\"dim\"]}{label}{C[\"reset\"]}' if label else ''
+            print(f'{col}{sym}  {cid:<30}{C[\"reset\"]}  [{tool}]{amb}{match}{label_str}')
+        print()
+
+print(f'  Summary: {summary.get(\"unmanaged\",0)} unmanaged, '
+      f'{summary.get(\"managed_copy\",0)} managed-copy, '
+      f'{summary.get(\"managed_symlink\",0)} managed-symlink  '
+      f'({summary.get(\"total\",0)} total)')
+"
+    echo ""
+}
+
+cmd_scan_autofix() {
+    _apm_require_skills_mode "scan autofix"
+
+    if [ -z "$APM_SKILLS_DB" ]; then
+        apm_die 2 "No skills library path configured. Run: apm setup"
+    fi
+
+    # Collect same --dir flags as cmd_scan_external
+    local scan_dirs=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dir|-d) [ $# -lt 2 ] && apm_die 2 "--dir requires a value"; scan_dirs+=("$2"); shift 2 ;;
+            --max-depth) local _max_depth="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    if [ ${#scan_dirs[@]} -eq 0 ]; then
+        if [ -n "${APM_SCAN_DIRS:-}" ]; then
+            IFS=':' read -ra scan_dirs <<< "$APM_SCAN_DIRS"
+        else
+            scan_dirs=("$HOME/code/tools")
+        fi
+    fi
+
+    local dirs_csv
+    dirs_csv=$(IFS=','; echo "${scan_dirs[*]}")
+    local max_depth="${_max_depth:-6}"
+
+    # Run scan and extract managed-copy entries as JSON array
+    local scan_out
+    scan_out=$(_apm_py scan-external-skills \
+        --scan-dirs "$dirs_csv" \
+        --db "$APM_SKILLS_DB" \
+        --max-depth "$max_depth")
+
+    local copies_json
+    copies_json=$(echo "$scan_out" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+copies = [r for r in data.get('results', []) if r['db_status'] == 'managed-copy']
+print(json.dumps(copies))
+")
+
+    local count
+    count=$(echo "$copies_json" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+
+    echo ""
+    printf "  %-14s : %s\n" "Mode" "skills / scan autofix"
+    printf "  %-14s : %s\n" "Scan dirs" "$dirs_csv"
+    printf "  %-14s : %s\n" "Skills DB" "$APM_SKILLS_DB"
+    echo ""
+
+    if [ "$count" -eq 0 ]; then
+        echo "  No managed-copy skills found — nothing to fix."
+        echo ""
+        return 0
+    fi
+
+    echo "  The following skills_db entries are plain copies of an external source."
+    echo "  Autofix will back up each entry and replace it with a symlink."
+    echo ""
+
+    echo "$copies_json" | python3 -c "
+import json, sys
+copies = json.load(sys.stdin)
+for r in copies:
+    print(f'  ~ {r[\"db_match_id\"]:<30}  {r[\"skill_dir\"]} -> {r[\"db_match_id\"]}')
+    print(f'    source : {r[\"skill_dir\"]}')
+"
+    echo ""
+
+    if [ "$APM_DRY_RUN" = "1" ]; then
+        echo "  (dry run — nothing changed)"
+        echo ""
+        return 0
+    fi
+
+    if [ "$APM_FORCE" != "1" ]; then
+        printf "  Convert %s entr%s to symlink(s)? [y/N] " \
+            "$count" "$([ "$count" -eq 1 ] && echo y || echo ies)"
+        read -r _confirm
+        case "$_confirm" in
+            [yY]*) ;;
+            *) echo "  Cancelled."; echo ""; return 0 ;;
+        esac
+    fi
+
+    local timestamp
+    timestamp=$(date -u +%Y%m%d-%H%M%S)
+    local backups_dir="${APM_SKILLS_DB}/_backups"
+    apm_ensure_dir "$backups_dir" || apm_die 2 "Cannot create backups dir: $backups_dir"
+
+    apm_acquire_lock "library"
+
+    local fixed=0 failed=0
+
+    while IFS= read -r entry_json; do
+        local db_id skill_dir
+        db_id=$(echo "$entry_json"    | python3 -c "import json,sys; print(json.load(sys.stdin)['db_match_id'])")
+        skill_dir=$(echo "$entry_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['skill_dir'])")
+
+        local db_entry="${APM_SKILLS_DB}/${db_id}"
+        local backup_path="${backups_dir}/${db_id}.apm-backup-${timestamp}"
+
+        printf "  %-12s : %s\n" "Fixing" "$db_id"
+
+        # Safety: db_entry must exist and be a real directory (not already a symlink)
+        if [ ! -d "$db_entry" ]; then
+            apm_warn "  Skipping $db_id — not found at $db_entry"
+            (( failed++ )) || true
+            continue
+        fi
+        if [ -L "$db_entry" ]; then
+            apm_warn "  Skipping $db_id — already a symlink"
+            (( failed++ )) || true
+            continue
+        fi
+        # skill_dir must still exist (tool source)
+        if [ ! -d "$skill_dir" ]; then
+            apm_warn "  Skipping $db_id — source no longer exists: $skill_dir"
+            (( failed++ )) || true
+            continue
+        fi
+
+        # Backup
+        if ! cp -r "$db_entry" "$backup_path"; then
+            apm_release_lock "library"
+            apm_die 2 "Failed to back up $db_entry to $backup_path"
+        fi
+        printf "  %-12s : %s\n" "Backup" "$backup_path"
+
+        # Replace with symlink
+        if ! rm -rf "$db_entry"; then
+            apm_release_lock "library"
+            apm_die 2 "Failed to remove $db_entry after backup"
+        fi
+        if ! ln -sfn "$skill_dir" "$db_entry"; then
+            # Attempt restore
+            cp -r "$backup_path" "$db_entry" 2>/dev/null
+            apm_release_lock "library"
+            apm_die 2 "Failed to create symlink $db_entry -> $skill_dir (restored from backup)"
+        fi
+
+        printf "  %-12s : %s -> %s\n" "Linked" "$db_entry" "$skill_dir"
+        echo ""
+        (( fixed++ )) || true
+
+    done < <(echo "$copies_json" | python3 -c "
+import json, sys
+for r in json.load(sys.stdin):
+    print(json.dumps(r))
+")
+
+    apm_release_lock "library"
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        python3 -c "import json; print(json.dumps({'command':'scan autofix','fixed':${fixed},'failed':${failed},'timestamp':'${timestamp}'}))"
+    else
+        echo "  Done. $fixed fixed, $failed skipped."
+        echo ""
+    fi
+}
+
+cmd_skill_duplicates() {
+    _apm_require_skills_mode "duplicates"
+
+    if [ -z "$APM_SKILLS_DB" ]; then
+        apm_die 2 "No skills library path configured. Run: apm setup"
+    fi
+
+    local out
+    out=$(_apm_py find-skill-duplicates --db "$APM_SKILLS_DB")
+
+    if [ "$APM_JSON_MODE" = "1" ]; then
+        echo "$out"
+        return 0
+    fi
+
+    echo ""
+    printf "  %-14s : %s\n" "Mode" "skills / duplicates"
+    printf "  %-14s : %s\n" "Skills DB" "$APM_SKILLS_DB"
+    echo ""
+
+    echo "$out" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+groups   = data.get('duplicate_groups', [])
+cands    = data.get('symlink_candidates', [])
+summary  = data.get('summary', {})
+
+tty = sys.stdout.isatty()
+C = {
+    'yellow': '\033[33m' if tty else '',
+    'cyan':   '\033[36m' if tty else '',
+    'bold':   '\033[1m'  if tty else '',
+    'dim':    '\033[2m'  if tty else '',
+    'reset':  '\033[0m'  if tty else '',
+}
+
+if groups:
+    print(f'  {C[\"bold\"]}Duplicate groups (identical content){C[\"reset\"]}')
+    for g in groups:
+        kind = g.get('kind', '')
+        ids  = g.get('ids', [])
+        dirs = g.get('skill_dirs', [])
+        print(f'  {C[\"yellow\"]}~{C[\"reset\"]}  {kind}')
+        for sid, sd in zip(ids, dirs):
+            rp = ''
+            rps = g.get('real_paths', [])
+            if rps:
+                rp = f'  -> {rps[ids.index(sid)]}' if rps[ids.index(sid)] else ''
+            print(f'       {sid:<30}  {C[\"dim\"]}{sd}{rp}{C[\"reset\"]}')
+    print()
+
+if cands:
+    print(f'  {C[\"bold\"]}Symlink candidates (copy matches a symlinked source){C[\"reset\"]}')
+    print(f'  {C[\"dim\"]}These entries are plain copies; consider converting to symlinks.{C[\"reset\"]}')
+    print(f'  {C[\"dim\"]}Run: apm --mode skills scan autofix  to convert copies to symlinks{C[\"reset\"]}')
+    print()
+    for c in cands:
+        print(f'  {C[\"cyan\"]}~{C[\"reset\"]}  {c[\"db_id\"]:<30}  copy of -> {c[\"symlink_db_id\"]}')
+        print(f'       skill_dir  : {c[\"skill_dir\"]}')
+        print(f'       source     : {c[\"matching_real_path\"]}')
+    print()
+
+if not groups and not cands:
+    print('  No duplicates found.')
+    print()
+
+print(f'  Summary: {summary.get(\"duplicate_groups\",0)} duplicate group(s), '
+      f'{summary.get(\"symlink_candidates\",0)} symlink candidate(s)  '
+      f'({summary.get(\"total_skills\",0)} skills total)')
+"
+    echo ""
+}
+
+_apm_require_skills_mode() {
+    local cmd="${1:-command}"
+    if [ "${APM_MODE}" != "skills" ]; then
+        apm_die 2 "'$cmd' requires --mode skills"
+    fi
+}
+
 cmd_status() {
     if [ -z "$APM_ACTIVE_DB" ]; then
         apm_die 2 "No library path configured. Run: apm setup"
@@ -713,11 +1065,48 @@ for s in data.get('skills', []):
 }
 
 cmd_install_skills() {
-    local id="${1:-}"
-
     if [ -z "$APM_SKILLS_DB" ]; then
         apm_die 2 "No skills library path configured. Run: apm setup"
     fi
+
+    # Multi-platform: when -p cc,agt (or DEFAULT_PLATFORMS has multiple entries),
+    # loop over each platform and run the install for each.
+    local _platforms
+    _platforms=$(_apm_expand_platforms "${APM_DEFAULT_PLATFORMS:-${APM_PLATFORM}}")
+    local _platform_count
+    _platform_count=$(echo "$_platforms" | grep -c .)
+
+    if [ "$_platform_count" -gt 1 ]; then
+        local _saved_platform="$APM_PLATFORM"
+        local _saved_runtime="$APM_RUNTIME_DIR"
+        local _saved_scope="$APM_SCOPE"
+        local _mp_ok=0 _mp_fail=0
+        while IFS= read -r _plat; do
+            [ -z "$_plat" ] && continue
+            APM_PLATFORM="$_plat"
+            _apm_resolve_runtime_and_scope
+            if [ "$APM_JSON_MODE" != "1" ]; then
+                echo ""
+                echo "  ── Platform: $_plat ──"
+            fi
+            if _cmd_install_skills_single "$@"; then
+                _mp_ok=$((_mp_ok + 1))
+            else
+                _mp_fail=$((_mp_fail + 1))
+            fi
+        done <<< "$_platforms"
+        APM_PLATFORM="$_saved_platform"
+        APM_RUNTIME_DIR="$_saved_runtime"
+        APM_SCOPE="$_saved_scope"
+        return $(( _mp_fail > 0 ? 1 : 0 ))
+    fi
+
+    _cmd_install_skills_single "$@"
+}
+
+_cmd_install_skills_single() {
+    local id="${1:-}"
+
     _apm_skills_require_supported_platform
     if [ -z "$APM_RUNTIME_DIR" ]; then
         apm_die 2 "No runtime directory configured for skills on platform: $APM_PLATFORM"
@@ -793,9 +1182,10 @@ for s in d.get('skills',[]):
         apm_die 2 "Usage: apm --mode skills install <id|--all>"
     fi
 
-    local status_json skill_dir runtime_file sync_state
+    local status_json skill_dir real_path runtime_file sync_state
     status_json=$(_apm_skill_status_json)
     skill_dir=$(_apm_skill_field_from_status "$id" "paths.skill_dir" "$status_json")
+    real_path=$(_apm_skill_field_from_status "$id" "paths.real_path" "$status_json")
     runtime_file=$(_apm_skill_field_from_status "$id" "paths.runtime_file" "$status_json")
     sync_state=$(_apm_skill_field_from_status "$id" "state.sync" "$status_json")
 
@@ -807,7 +1197,11 @@ for s in d.get('skills',[]):
         echo ""
         printf "  %-10s : %s\n" "Installing" "$id"
         printf "  %-10s : %s\n" "Platform" "$APM_PLATFORM"
-        printf "  %-10s : %s\n" "Source" "$skill_dir"
+        if [ -n "$real_path" ]; then
+            printf "  %-10s : %s -> %s\n" "Source" "$skill_dir" "$real_path"
+        else
+            printf "  %-10s : %s\n" "Source" "$skill_dir"
+        fi
         printf "  %-10s : %s\n" "Target" "$runtime_file"
         echo ""
     fi
@@ -848,6 +1242,42 @@ cmd_install() {
         return $?
     fi
 
+    # Multi-platform: if DEFAULT_PLATFORMS has multiple entries and -p was not
+    # used to override to a single platform, loop over each.
+    local _platforms
+    _platforms=$(_apm_expand_platforms "${APM_DEFAULT_PLATFORMS:-${APM_PLATFORM}}")
+    local _platform_count
+    _platform_count=$(echo "$_platforms" | grep -c .)
+
+    if [ "$_platform_count" -gt 1 ]; then
+        local _saved_platform="$APM_PLATFORM"
+        local _saved_runtime="$APM_RUNTIME_DIR"
+        local _saved_scope="$APM_SCOPE"
+        local _mp_ok=0 _mp_fail=0
+        while IFS= read -r _plat; do
+            [ -z "$_plat" ] && continue
+            APM_PLATFORM="$_plat"
+            _apm_resolve_runtime_and_scope
+            if [ "$APM_JSON_MODE" != "1" ]; then
+                echo ""
+                echo "  ── Platform: $_plat ──"
+            fi
+            if _cmd_install_single "$@"; then
+                _mp_ok=$((_mp_ok + 1))
+            else
+                _mp_fail=$((_mp_fail + 1))
+            fi
+        done <<< "$_platforms"
+        APM_PLATFORM="$_saved_platform"
+        APM_RUNTIME_DIR="$_saved_runtime"
+        APM_SCOPE="$_saved_scope"
+        return $(( _mp_fail > 0 ? 1 : 0 ))
+    fi
+
+    _cmd_install_single "$@"
+}
+
+_cmd_install_single() {
     local id="${1:-}"
 
     if [ -z "$APM_AGENTS_DB" ]; then
@@ -3831,6 +4261,16 @@ main() {
 
     # Dispatch
     case "$cmd" in
+        skills)
+            # positional shortcut: apm skills <subcmd> [args] — re-invoke with -s injected
+            shift_args=("${_REMAINING_ARGS[@]:1}")
+            exec "$0" -s "${shift_args[@]}"
+            ;;
+        agents)
+            # positional shortcut: apm agents <subcmd> [args] — re-invoke with -a injected
+            shift_args=("${_REMAINING_ARGS[@]:1}")
+            exec "$0" -a "${shift_args[@]}"
+            ;;
         setup)
             cmd_setup
             ;;
@@ -3885,6 +4325,16 @@ main() {
             _apm_require_agents_mode "links"
             cmd_links "${_REMAINING_ARGS[1]:-}"
             ;;
+        scan)
+            if [ "${_REMAINING_ARGS[1]:-}" = "autofix" ]; then
+                cmd_scan_autofix "${_REMAINING_ARGS[@]:2}"
+            else
+                cmd_scan_external "${_REMAINING_ARGS[@]:1}"
+            fi
+            ;;
+        duplicates)
+            cmd_skill_duplicates
+            ;;
         github)
             cmd_github "${_REMAINING_ARGS[@]:1}"
             ;;
@@ -3905,14 +4355,19 @@ Usage:
   apm [flags] <command> [args]
 
 Global flags:
-  --db <path>        Override library database path
-  --mode <name>      Select mode (agents or skills)
-  --platform <name>  Override platform (claude-code, cursor, codex, gemini, generic)
-  --project-dir <path>  Force project scope rooted at a specific folder
-  --global, -g       Force global scope (ignore local .claude/ etc)
-  --json             Machine-readable JSON output
-  --dry-run          Show what would happen without doing it
-  --force            Skip confirmation prompts
+  --skills, -s                   Shorthand for --mode skills
+  --agents, -a                   Shorthand for --mode agents
+  --mode <name>                  Select mode: agents | skills
+  --platform <names>, -p <names> Platform(s), comma-separated; overrides default-platforms for this run
+                                 Full: claude-code, cursor, codex, gemini, windsurf, continue, agents-dir, generic
+                                 Short: cc, crs, cdx, gmn, wds, cnt, agt, gen
+  --json, -j                     Machine-readable JSON output
+  --force, -f                    Skip confirmation prompts
+  --dry-run                      Show what would happen without writing anything
+  --global, -g                   Force global scope (ignore local .claude/ etc)
+  --cwd <path>                   Force project scope rooted at a specific folder
+  --install-mode <mode>          Override install mode for this run: copy | symlink
+  --db <path>                    Override library database path
 
 Commands:
   setup                        Configure apm (interactive wizard)
@@ -3934,6 +4389,9 @@ Commands:
   link <id> [--as <alias>] [--project|--global]   Symlink agent split file into runtime dir
   unlink <id> [--project|--global|--all]           Remove symlink(s) for an agent
   links [id]                   List tracked symlinks (all agents or one)
+  scan [--dir <path>] …        Scan directories for SKILL.md files not yet in the library (skills mode)
+  scan autofix [--dir <path>]  Convert managed-copy skills to symlinks pointing at their source (skills mode)
+  duplicates                   Find duplicate or copy-of-symlink skills in the library (skills mode)
   github <sub>                 GitHub sync (connect, status, diff, push, pull)
   btui                         Launch the bash/Python TUI (legacy fallback, alias: tui)
   rtui                         Launch the Ratatui TUI (build first: cd lib/rust/apm-tui && cargo build --release)

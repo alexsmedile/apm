@@ -16,9 +16,9 @@ This file is the canonical working guide for agents operating in this `apm` repo
 
 The implementation is hybrid:
 
-- shell entrypoint: [`apm`](/Users/alex/code/tools/apm/apm)
-- shell helpers: [`lib/shell/`](/Users/alex/code/tools/apm/lib/shell)
-- Python helper: [`lib/py/apm_python.py`](/Users/alex/code/tools/apm/lib/py/apm_python.py)
+- shell entrypoint: [`apm`](apm)
+- shell helpers: [`lib/shell/`](lib/shell)
+- Python helper: [`lib/py/apm_python.py`](lib/py/apm_python.py)
 
 Shell owns orchestration, prompts, locking, filesystem operations, and git subprocesses.
 Python owns YAML/frontmatter parsing, normalization, validation, manifest generation, and JSON output.
@@ -34,11 +34,11 @@ Python owns YAML/frontmatter parsing, normalization, validation, manifest genera
 
 ## Important Local Paths
 
-- Repo script: `/Users/alex/code/tools/apm/apm`
-- Installed command: `/Users/alex/.local/bin/apm`
+- Repo script: `<repo-root>/apm`
+- Installed command: `~/.local/bin/apm`
 - User config: `~/.config/apm/config.sh`
-- Bash libs: `/Users/alex/code/tools/apm/lib/shell/`
-- Python helper: `/Users/alex/code/tools/apm/lib/py/apm_python.py`
+- Bash libs: `<repo-root>/lib/shell/`
+- Python helper: `<repo-root>/lib/py/apm_python.py`
 
 ## Current User Preference
 
@@ -52,31 +52,96 @@ apm --mode skills --platform agents-dir list
 
 The user wants clear per-platform visibility.
 
-## First Commands To Run
+## Agent Onboarding — Read This First
 
-Use these first to understand the environment:
+When an agent opens this repo, follow these steps in order.
+
+### Step 1 — Check if apm is already installed
+
+```bash
+command -v apm && apm --version
+```
+
+- If found and working: skip to Step 3.
+- If not found: go to Step 2.
+
+### Step 2 — Install apm
+
+```bash
+bash install.sh
+```
+
+This links `apm` into `~/.local/bin/apm`. The installer will also offer to install the `apm` skill into `~/.claude/skills/` and `~/.agents/skills/` — accept it so agents can use apm commands going forward.
+
+If `~/.local/bin` is not in `$PATH`, add it:
+
+```bash
+export PATH="$PATH:$HOME/.local/bin"
+```
+
+Verify:
+
+```bash
+apm --version
+```
+
+### Step 3 — Check if apm is configured
 
 ```bash
 apm config
-apm --help
-apm status
-apm list
 ```
 
-For skills:
+Look for `Library` and `Runtime dir` in the output. If they show valid paths, apm is configured — skip to Step 4.
+
+If the library path is missing or wrong, run the setup wizard:
 
 ```bash
-apm --mode skills --platform claude-code status
-apm --mode skills --platform claude-code list
+apm setup
 ```
 
-## First Time Setup
+The wizard asks for:
+- `AGENTS_DB` path — your canonical agents library folder
+- `SKILLS_DB` path — your canonical skills library folder
+- default mode (`agents` or `skills`)
+- default platform (`claude-code`, `codex`, `gemini`, `agents-dir`, etc.)
+
+### Step 4 — Orient yourself
 
 ```bash
-apm config
+apm status          # count summary by state
+apm list            # all agents with sync state
+apm -s -p cc list   # skills for claude-code
+apm -s -p agt list  # skills for agents-dir
 ```
 
-IMPORTAT FOR AGENTS: if this users's first time setup guide him into installing the apm tool correctly on his machine and setting up local database variables first. If already done, the first time setup step is not needed.
+This tells you what is installed, what is outdated, and what is ready to install.
+
+### Step 5 — Install the apm skill (if not done by install.sh)
+
+The `apm` skill teaches agents how to use this tool. Install it globally:
+
+```bash
+apm -s -p cc,agt install apm
+```
+
+Or project-locally from the repo root:
+
+```bash
+apm -s -p cc,agt --cwd . install apm
+```
+
+### Step 6 — Normal operation
+
+You are now ready. Use apm commands for all agent and skill management — never edit runtime directories directly.
+
+```bash
+apm install <agent-id>               # install an agent
+apm -s -p cc install <skill-id>      # install a skill
+apm update                           # reinstall all outdated agents
+apm -s -p cc install --all           # install all ready/outdated skills
+apm diff <agent-id>                  # compare library vs runtime
+apm import                           # import unmanaged runtime agents
+```
 
 ## Config and Resolution Rules
 
@@ -87,8 +152,8 @@ IMPORTAT FOR AGENTS: if this users's first time setup guide him into installing 
 
 Relevant config/runtime logic lives in:
 
-- [`lib/shell/config.shlib`](/Users/alex/code/tools/apm/lib/shell/config.shlib)
-- [`lib/shell/locks.shlib`](/Users/alex/code/tools/apm/lib/shell/locks.shlib)
+- [`lib/shell/config.shlib`](lib/shell/config.shlib)
+- [`lib/shell/locks.shlib`](lib/shell/locks.shlib)
 
 ## Safety Rules
 
@@ -137,7 +202,7 @@ pip3 install pyyaml
 - JSON-only Python output for shell consumption
 - Manifest-centered state calculations
 - No ad hoc YAML parsing in shell
-- Use UI helpers from [`lib/shell/ui.shlib`](/Users/alex/code/tools/apm/lib/shell/ui.shlib)
+- Use UI helpers from [`lib/shell/ui.shlib`](lib/shell/ui.shlib)
 
 ## Canonical Agent Rules
 
@@ -170,7 +235,10 @@ Installed agent runtime files must include:
 ## Canonical Skill Rules
 
 - Canonical skill ID is the folder name that directly contains `SKILL.md`
-- `apm` supports direct skill folders and nested `repo/skills/<skill>/SKILL.md` layouts
+- `apm` supports two layouts in `SKILLS_DB`:
+  1. **Direct**: `skills_db/<skill-id>/SKILL.md` — single skill, registered directly
+  2. **Repo**: `skills_db/<repo>/skills/<skill-id>/SKILL.md` — multiple skills under one repo entry; all sub-skills are auto-discovered and individually installable by ID
+- When a repo has multiple sub-skills, register the repo once in `skills_db`; do not create individual symlinks for each sub-skill
 - Runtime skill installs should normally be symlinks from platform runtime dir back to canonical `SKILLS_DB`
 
 For skills:
@@ -240,9 +308,12 @@ Skills:
 apm --mode skills --platform claude-code install <id>
 apm --mode skills --platform claude-code install --all
 apm --mode skills --platform claude-code remove <id>
+
+# Multi-platform (comma-separated): installs to both platforms in one command
+apm -s -p cc,agt install <id>
 ```
 
-For skills, install should create a symlink to canonical `SKILLS_DB`.
+For skills, install should create a symlink to canonical `SKILLS_DB`. Comma-separated platforms (`-p cc,agt`) install to each platform sequentially.
 
 ### Diff
 
@@ -378,11 +449,11 @@ Use `tests/fakeagents-db/` for manual GitHub sync and playground-style verificat
 
 ## Important References
 
-- [`docs/ARCHITECTURE.md`](/Users/alex/code/tools/apm/docs/ARCHITECTURE.md)
-- [`docs/WORKFLOWS.md`](/Users/alex/code/tools/apm/docs/WORKFLOWS.md)
-- [`docs/AGENT_ENTRY_SCHEMA.md`](/Users/alex/code/tools/apm/docs/AGENT_ENTRY_SCHEMA.md)
-- [`docs/DATABASE_LIBRARY.md`](/Users/alex/code/tools/apm/docs/DATABASE_LIBRARY.md)
-- [`docs/bash_tui.md`](/Users/alex/code/tools/apm/docs/bash_tui.md)
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md)
+- [`docs/AGENT_ENTRY_SCHEMA.md`](docs/AGENT_ENTRY_SCHEMA.md)
+- [`docs/DATABASE_LIBRARY.md`](docs/DATABASE_LIBRARY.md)
+- [`docs/bash_tui.md`](docs/bash_tui.md)
 
 ## Practical Guidance For Agents Working Here
 

@@ -80,6 +80,13 @@ apm link agent-mentor      # symlink runtime file directly to split instructions
 apm diff agent-mentor      # compare library vs runtime
 apm update               # reinstall all outdated agents
 apm import               # import unmanaged runtime agents into library
+
+# Skills
+apm -s list                                        # list all skills and sync state
+apm -s find browser-use                            # search library
+apm -s -p cc install browser-use                   # install to claude-code
+apm -s -p cc,agt install browser-use               # install to multiple platforms at once
+apm -s -p cc install --all                         # install all ready/outdated skills
 ```
 
 ## Library layout
@@ -132,8 +139,9 @@ Skill rules:
 - `apm` prefers `skills_db/<repo>/skills/<skill>/SKILL.md`.
 - If a top-level entry has no `skills/` folder, `apm` falls back to `skills_db/<skill>/SKILL.md`.
 - The canonical skill ID is the skill folder name that directly contains `SKILL.md`.
+- When a repo has multiple sub-skills, register the repo once in `skills_db` — all sub-skills are auto-discovered and individually installable by ID with no extra symlinks.
 
-Platform aliases: `claude-code→cc`, `cursor→crs`, `gemini→gmn`, `codex→cdx`, `generic→gen`
+Platform aliases: `claude-code→cc`, `cursor→crs`, `gemini→gmn`, `codex→cdx`, `agents-dir→agt`, `generic→gen`
 
 > **About the "agents".** In most AI tools, "agent" means the tool's primary AI persona, but the `agents/` directories (`~/.claude/agents/`, `~/.cursor/agents/`, etc.) actually hold **subagents** — specialized, named agents invoked for specific tasks. `apm` manages subagents only.
 
@@ -234,9 +242,13 @@ apm github pull agent-mentor   # pull one agent (staged by default)
 | `status` | Count summary by state |
 | `validate [id]` | Validate agent(s) in library |
 | `diff <id>` | Show library vs runtime diff |
-| `install <id> [id…]` | Install agents, or in `--mode skills` create skill symlinks |
+| `install <id> [id…]` | Install agents, or in `-s` mode create skill symlinks |
 | `install --all` | Install every ready/outdated agent or skill |
-| `install --cat <name>` | Install all agents in a category |
+| `install --cat <name>` | Install all agents in a category (agents mode) |
+| `find <query>` | Search library by name or description |
+| `scan [--dir <path>]` | Find unmanaged skills in tool directories |
+| `scan autofix` | Convert managed-copy skill entries to symlinks |
+| `duplicates` | Find content-identical or redundant skills (skills mode) |
 | `link <id>` | Symlink agent body directly into the runtime dir |
 | `unlink <id>` | Remove tracked symlink(s) for an agent |
 | `links [id]` | List tracked symlinks for one agent or all agents |
@@ -255,8 +267,9 @@ apm github pull agent-mentor   # pull one agent (staged by default)
 
 ```
 --db <path>        Override library path
---platform <name>  Override platform (claude-code, cursor, codex, gemini, generic)
---install-mode     Override install mode (`copy` or `symlink`)
+--platform <name>  Override platform (claude-code, cursor, codex, gemini, agents-dir, generic)
+                   Comma-separated for multi-platform install: -p cc,agt
+--install-mode <mode>  Override install mode (`copy` or `symlink`)
 --json             Machine-readable JSON output
 --dry-run          Preview without writing
 --force            Skip confirmation prompts

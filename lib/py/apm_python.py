@@ -240,23 +240,27 @@ def _scan_skill_records(db_path: str) -> list[dict]:
                     continue
                 skill_file = os.path.join(skill_dir, 'SKILL.md')
                 if os.path.isfile(skill_file):
+                    real_path = os.path.realpath(skill_dir) if os.path.islink(skill_dir) else ''
                     records.append({
                         'id': skill_entry,
                         'skill_dir': skill_dir,
                         'skill_file': skill_file,
                         'source': 'repo-skills',
                         'repo': entry,
+                        'real_path': real_path,
                     })
             continue
 
         skill_file = os.path.join(full, 'SKILL.md')
         if os.path.isfile(skill_file):
+            real_path = os.path.realpath(full) if os.path.islink(full) else ''
             records.append({
                 'id': entry,
                 'skill_dir': full,
                 'skill_file': skill_file,
                 'source': 'direct',
                 'repo': '',
+                'real_path': real_path,
             })
 
     return records
@@ -904,6 +908,10 @@ def list_skills(db_path: str) -> dict:
                 'kind': rec.get('source', ''),
                 'repo': rec.get('repo', ''),
             },
+            'paths': {
+                'skill_dir': rec['skill_dir'],
+                'real_path': rec.get('real_path', ''),
+            },
         })
     return {'skills': skills}
 
@@ -968,6 +976,7 @@ def status_skills(db_path: str, platform: str = '', runtime_dir: str = '') -> di
             'id': sid,
             'paths': {
                 'skill_dir': skill_dir,
+                'real_path': rec.get('real_path', ''),
                 'root_file': skill_file,
                 'runtime_file': runtime_path,
                 'github_stage_dir': os.path.join(db_path, '_staging', 'github'),
@@ -1372,6 +1381,267 @@ def scan_unmanaged_runtime(runtime_dir: str, db_path: str,
 
 
 # ---------------------------------------------------------------------------
+# External skill scan
+# ---------------------------------------------------------------------------
+
+# Directories to skip when scanning for external skills
+_SCAN_SKIP_DIRS = {
+    'tests', 'test', 'fixtures', 'fixture', '.git', '__pycache__',
+    'node_modules', '.venv', 'venv', '_archive', '_archives',
+    '_backup', '_backups', '_imports', '_staging', 'vendor',
+}
+
+
+def _skill_content_hash(path: str) -> str:
+    """SHA-256 of stripped SKILL.md content."""
+    with open(path, 'r', encoding='utf-8') as f:
+        return hashlib.sha256(f.read().strip().encode()).hexdigest()
+
+
+def _derive_candidate_id(skill_dir: str, scan_root: str) -> tuple[str, bool]:
+    """
+    Derive a candidate skill ID from skill_dir relative to scan_root.
+    Returns (candidate_id, ambiguous).
+    Layouts handled:
+      scan_root/tool/SKILL.md            -> id = tool
+      scan_root/tool/skills/<id>/SKILL.md -> id = <id>
+      scan_root/tool/<id>/SKILL.md        -> id = <id>
+      deeper nesting                      -> id = containing folder, ambiguous=True
+    """
+    rel = os.path.relpath(skill_dir, scan_root)
+    parts = rel.split(os.sep)
+
+    ambiguous = False
+    if len(parts) == 1:
+        # scan_root/tool  (SKILL.md at tool root)
+        candidate = parts[0]
+    elif len(parts) == 2:
+        # scan_root/tool/<id>
+        candidate = parts[1]
+    elif len(parts) == 3 and parts[1] == 'skills':
+        # scan_root/tool/skills/<id>
+        candidate = parts[2]
+    else:
+        # Deep path — use the containing folder name, flag ambiguous
+        candidate = parts[-1]
+        ambiguous = True
+
+    # Sanitize to canonical ID format
+    candidate = re.sub(r'[^a-z0-9-]', '-', candidate.lower()).strip('-')
+    if not CANONICAL_ID_RE.match(candidate):
+        candidate = 'unknown'
+        ambiguous = True
+
+    return candidate, ambiguous
+
+
+def scan_external_skills(scan_dirs: list[str], db_path: str,
+                          max_depth: int = 6) -> dict:
+    """
+    Walk each dir in scan_dirs for SKILL.md files not yet managed in db_path.
+
+    Each result has:
+      skill_dir       absolute path to the folder containing SKILL.md
+      skill_file      absolute path to SKILL.md
+      candidate_id    inferred skill ID
+      ambiguous       True if layout was unusual and ID may be wrong
+      scan_root       which scan_dir this was found under
+      source_tool     top-level folder name under scan_root
+      name            from SKILL.md frontmatter (or '')
+      description     from SKILL.md frontmatter (or '')
+      db_status       'managed-symlink' | 'managed-copy' | 'unmanaged'
+      db_match_id     skills_db ID that matched (if managed)
+
+    Returns {results, summary}.
+    """
+    db_path = os.path.expanduser(db_path)
+
+    # Build lookup tables from skills_db
+    db_records = _scan_skill_records(db_path)
+
+    # real_path -> db_id  (for symlink-managed entries)
+    realpath_to_db: dict[str, str] = {}
+    # content hash -> db_id  (for copy-managed entries)
+    hash_to_db: dict[str, str] = {}
+
+    for rec in db_records:
+        skill_dir = rec['skill_dir']
+        real_p = rec.get('real_path', '')
+        if real_p:
+            realpath_to_db[real_p] = rec['id']
+        else:
+            realpath_to_db[os.path.realpath(skill_dir)] = rec['id']
+        skill_file = rec['skill_file']
+        try:
+            h = _skill_content_hash(skill_file)
+            hash_to_db[h] = rec['id']
+        except Exception:
+            pass
+
+    results = []
+
+    for raw_dir in scan_dirs:
+        scan_root = os.path.expanduser(raw_dir)
+        if not os.path.isdir(scan_root):
+            continue
+
+        # Walk up to max_depth, collecting SKILL.md paths
+        for dirpath, dirnames, filenames in os.walk(scan_root):
+            # Prune skip dirs in-place
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in _SCAN_SKIP_DIRS and not d.startswith('.')
+            ]
+
+            # Enforce max depth
+            depth = len(os.path.relpath(dirpath, scan_root).split(os.sep))
+            if depth > max_depth:
+                dirnames.clear()
+                continue
+
+            if 'SKILL.md' not in filenames:
+                continue
+
+            skill_dir = dirpath
+            skill_file = os.path.join(skill_dir, 'SKILL.md')
+
+            # Parse frontmatter
+            name = ''
+            description = ''
+            try:
+                fm, _ = parse_skill_file(skill_file)
+                name = fm.get('name', '')
+                description = fm.get('description', '')
+            except Exception:
+                pass
+
+            candidate_id, ambiguous = _derive_candidate_id(skill_dir, scan_root)
+
+            # Determine source_tool (top-level folder under scan_root)
+            rel_parts = os.path.relpath(skill_dir, scan_root).split(os.sep)
+            source_tool = rel_parts[0] if rel_parts else ''
+
+            # Check db status
+            real_p = os.path.realpath(skill_dir)
+            db_status = 'unmanaged'
+            db_match_id = ''
+
+            if real_p in realpath_to_db:
+                db_status = 'managed-symlink'
+                db_match_id = realpath_to_db[real_p]
+            else:
+                try:
+                    h = _skill_content_hash(skill_file)
+                    if h in hash_to_db:
+                        db_status = 'managed-copy'
+                        db_match_id = hash_to_db[h]
+                except Exception:
+                    pass
+
+            results.append({
+                'skill_dir':    skill_dir,
+                'skill_file':   skill_file,
+                'candidate_id': candidate_id,
+                'ambiguous':    ambiguous,
+                'scan_root':    scan_root,
+                'source_tool':  source_tool,
+                'name':         name,
+                'description':  description,
+                'db_status':    db_status,
+                'db_match_id':  db_match_id,
+            })
+
+    # Sort: unmanaged first, then managed-copy, managed-symlink
+    order = {'unmanaged': 0, 'managed-copy': 1, 'managed-symlink': 2}
+    results.sort(key=lambda r: (order.get(r['db_status'], 9), r['source_tool'], r['candidate_id']))
+
+    summary = {
+        'total':           len(results),
+        'unmanaged':       sum(1 for r in results if r['db_status'] == 'unmanaged'),
+        'managed_copy':    sum(1 for r in results if r['db_status'] == 'managed-copy'),
+        'managed_symlink': sum(1 for r in results if r['db_status'] == 'managed-symlink'),
+    }
+
+    return {'results': results, 'summary': summary, 'scan_dirs': scan_dirs}
+
+
+# ---------------------------------------------------------------------------
+# Skill duplicate finder
+# ---------------------------------------------------------------------------
+
+def find_skill_duplicates(db_path: str) -> dict:
+    """
+    Find skills in db_path that are content-identical to each other or that
+    are non-symlinked copies of a path already tracked via another symlinked entry.
+
+    Returns:
+      duplicate_groups  list of groups, each group is a list of db_ids with identical content
+      symlink_candidates list of {db_id, skill_dir, matching_real_path, symlink_db_id}
+                         — non-symlinked entries whose content matches a symlinked entry's source
+    """
+    db_path = os.path.expanduser(db_path)
+    records = _scan_skill_records(db_path)
+
+    # Build hash -> [rec]
+    hash_to_recs: dict[str, list] = {}
+    for rec in records:
+        try:
+            h = _skill_content_hash(rec['skill_file'])
+        except Exception:
+            continue
+        hash_to_recs.setdefault(h, []).append(rec)
+
+    # Duplicate groups: same hash, 2+ entries
+    duplicate_groups = []
+    symlink_candidates = []
+
+    for h, recs in hash_to_recs.items():
+        if len(recs) < 2:
+            continue
+
+        symlinked = [r for r in recs if r.get('real_path')]
+        non_symlinked = [r for r in recs if not r.get('real_path')]
+
+        if len(recs) >= 2 and not symlinked:
+            # Pure duplicates within skills_db — no symlinks involved
+            duplicate_groups.append({
+                'ids':         [r['id'] for r in recs],
+                'skill_dirs':  [r['skill_dir'] for r in recs],
+                'kind':        'internal-duplicate',
+            })
+        elif symlinked and non_symlinked:
+            # Some are symlinked (canonical source), others are plain copies
+            for ns in non_symlinked:
+                symlink_candidates.append({
+                    'db_id':             ns['id'],
+                    'skill_dir':         ns['skill_dir'],
+                    'matching_real_path': symlinked[0].get('real_path', ''),
+                    'symlink_db_id':     symlinked[0]['id'],
+                    'kind':              'copy-of-symlinked',
+                })
+        elif len(symlinked) >= 2:
+            # Multiple symlinks pointing to content-identical (but different) sources
+            duplicate_groups.append({
+                'ids':         [r['id'] for r in recs],
+                'skill_dirs':  [r['skill_dir'] for r in recs],
+                'real_paths':  [r.get('real_path', '') for r in recs],
+                'kind':        'duplicate-symlinks',
+            })
+
+    summary = {
+        'total_skills':        len(records),
+        'duplicate_groups':    len(duplicate_groups),
+        'symlink_candidates':  len(symlink_candidates),
+    }
+
+    return {
+        'duplicate_groups':   duplicate_groups,
+        'symlink_candidates': symlink_candidates,
+        'summary':            summary,
+    }
+
+
+# ---------------------------------------------------------------------------
 # GitHub diff helper
 # ---------------------------------------------------------------------------
 
@@ -1591,6 +1861,21 @@ def cmd_scan_unmanaged(args):
         db_path=args.db,
         ignore_file=getattr(args, 'ignore_file', '') or '',
     )
+    print(_dump(result))
+
+
+def cmd_scan_external_skills(args):
+    scan_dirs = [d.strip() for d in args.scan_dirs.split(',') if d.strip()]
+    result = scan_external_skills(
+        scan_dirs=scan_dirs,
+        db_path=args.db,
+        max_depth=int(getattr(args, 'max_depth', 6) or 6),
+    )
+    print(_dump(result))
+
+
+def cmd_find_skill_duplicates(args):
+    result = find_skill_duplicates(db_path=args.db)
     print(_dump(result))
 
 
@@ -1891,6 +2176,17 @@ def main():
     p.add_argument('--db', required=True)
     p.add_argument('--ignore-file', default='')
 
+    # scan-external-skills
+    p = subparsers.add_parser('scan-external-skills')
+    p.add_argument('--scan-dirs', required=True,
+                   help='Comma-separated list of directories to scan')
+    p.add_argument('--db', required=True)
+    p.add_argument('--max-depth', default='6')
+
+    # find-skill-duplicates
+    p = subparsers.add_parser('find-skill-duplicates')
+    p.add_argument('--db', required=True)
+
     # github-diff: compare canonical library agent dir vs a cloned repo dir
     p = subparsers.add_parser('github-diff')
     p.add_argument('--id', required=True)
@@ -1933,6 +2229,8 @@ def main():
         'list-all-links': cmd_list_all_links,
         'github-diff': cmd_github_diff,
         'github-status': cmd_github_status,
+        'scan-external-skills': cmd_scan_external_skills,
+        'find-skill-duplicates': cmd_find_skill_duplicates,
     }
 
     fn = dispatch.get(args.command)

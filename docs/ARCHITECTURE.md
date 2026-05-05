@@ -161,7 +161,7 @@ Suggested shape:
   "runtime_meta": {},
   "github": {
     "mode": "monorepo",
-    "owner": "alexsmedile",
+    "owner": "<github-owner>",
     "repo": "agents",
     "branch": "main",
     "repo_path": "git-mentor/"
