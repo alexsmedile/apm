@@ -178,7 +178,7 @@ Verified skill install targets:
 | Platform | Global target | Project target | Behavior |
 |---|---|---|---|
 | `claude-code` | `~/.claude/skills/` | `.claude/skills/` | symlink skill dir |
-| `codex` | `~/.codex/skills/` | `.codex/skills/` | symlink skill dir |
+| `codex` | `~/.agents/skills/` | `.agents/skills/` | symlink skill dir |
 | `windsurf` | `~/.codeium/windsurf/skills/` | `.windsurf/skills/` | symlink skill dir |
 | `agents-dir` | `~/.agents/skills/` | `.agents/skills/` | symlink skill dir |
 

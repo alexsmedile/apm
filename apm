@@ -2,7 +2,7 @@
 # apm — local-first package manager for AI agent prompt files
 # See PLAN.md and SPEC_*.md for full specification
 
-APM_VERSION="0.1.0"
+APM_VERSION="0.2.0"
 
 set -uo pipefail
 
