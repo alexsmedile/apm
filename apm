@@ -1197,6 +1197,7 @@ for s in d.get('skills',[]):
         echo ""
         printf "  %-10s : %s\n" "Installing" "$id"
         printf "  %-10s : %s\n" "Platform" "$APM_PLATFORM"
+        printf "  %-10s : %s → %s\n" "Scope" "${APM_SCOPE:-global}" "$APM_RUNTIME_DIR"
         if [ -n "$real_path" ]; then
             printf "  %-10s : %s -> %s\n" "Source" "$skill_dir" "$real_path"
         else
