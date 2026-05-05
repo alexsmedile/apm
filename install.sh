@@ -179,6 +179,68 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Skill install (optional)
+# ---------------------------------------------------------------------------
+
+SKILL_SRC="${APM_REPO_DIR}/skills/apm"
+
+if [ -d "$SKILL_SRC" ]; then
+    echo ""
+    echo "  ─────────────"
+    echo "  Install apm skill for AI agents?"
+    echo ""
+    echo "  This creates symlinks so agents (Claude Code, Codex, etc.) know how to use apm."
+    echo "  Default targets: .claude/skills/apm  and  .agents/skills/apm"
+    echo ""
+    printf "  Install skill? [Y/n] "
+    read -r _skill_confirm
+    case "${_skill_confirm:-y}" in
+        [nN]*) _warn "Skipped skill install" ;;
+        *)
+            _SKILL_OK=1
+
+            # .claude/skills
+            CLAUDE_SKILL_DIR="${HOME}/.claude/skills"
+            CLAUDE_SKILL_LINK="${CLAUDE_SKILL_DIR}/apm"
+            if mkdir -p "$CLAUDE_SKILL_DIR" 2>/dev/null; then
+                if [ -e "$CLAUDE_SKILL_LINK" ] || [ -L "$CLAUDE_SKILL_LINK" ]; then
+                    rm -f "$CLAUDE_SKILL_LINK"
+                fi
+                if ln -s "$SKILL_SRC" "$CLAUDE_SKILL_LINK" 2>/dev/null; then
+                    _info "Linked: $CLAUDE_SKILL_LINK → $SKILL_SRC"
+                else
+                    _warn "Failed to link: $CLAUDE_SKILL_LINK"
+                    _SKILL_OK=0
+                fi
+            else
+                _warn "Cannot create $CLAUDE_SKILL_DIR"
+                _SKILL_OK=0
+            fi
+
+            # .agents/skills
+            AGENTS_SKILL_DIR="${HOME}/.agents/skills"
+            AGENTS_SKILL_LINK="${AGENTS_SKILL_DIR}/apm"
+            if mkdir -p "$AGENTS_SKILL_DIR" 2>/dev/null; then
+                if [ -e "$AGENTS_SKILL_LINK" ] || [ -L "$AGENTS_SKILL_LINK" ]; then
+                    rm -f "$AGENTS_SKILL_LINK"
+                fi
+                if ln -s "$SKILL_SRC" "$AGENTS_SKILL_LINK" 2>/dev/null; then
+                    _info "Linked: $AGENTS_SKILL_LINK → $SKILL_SRC"
+                else
+                    _warn "Failed to link: $AGENTS_SKILL_LINK"
+                    _SKILL_OK=0
+                fi
+            else
+                _warn "Cannot create $AGENTS_SKILL_DIR"
+                _SKILL_OK=0
+            fi
+
+            [ "$_SKILL_OK" = "1" ] && _info "Skill installed — agents can now use apm commands"
+            ;;
+    esac
+fi
+
+# ---------------------------------------------------------------------------
 # First-run hint
 # ---------------------------------------------------------------------------
 

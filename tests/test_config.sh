@@ -132,13 +132,14 @@ run_test "config: legacy GEMINI_MD alias still works for gemini runtime" test_le
 test_setup_wizard_creates_config() {
     local cfgdir
     cfgdir=$(mktemp -d)
-    # Feed: db path, platform, install mode, no github
+    # Feed: agents_db, skills_db, mode, platform, default_platforms (accept default), install_mode, no github x2, confirm
     APM_CONFIG_DIR="$cfgdir" \
         bash "$PROJECT_ROOT/apm" setup <<'INPUT' > /dev/null 2>&1
 /tmp/test-agents-db
 /tmp/test-skills-db
 agents
 claude-code
+
 1
 n
 n
@@ -160,6 +161,7 @@ test_setup_wizard_writes_agents_db() {
 /tmp/test-skills-db
 agents
 claude-code
+
 1
 n
 n
@@ -181,6 +183,7 @@ test_setup_wizard_writes_platform() {
 /tmp/test-skills-db
 agents
 cursor
+
 1
 n
 n
@@ -204,6 +207,7 @@ test_setup_wizard_atomic_write() {
 /tmp/test-skills-db
 agents
 claude-code
+
 1
 n
 n
@@ -226,6 +230,7 @@ test_setup_wizard_with_github() {
 /tmp/test-skills-db
 agents
 claude-code
+
 1
 y
 monorepo

@@ -13,6 +13,9 @@ _APM_TEST_CONFIG_DIR=$(mktemp -d)
 export APM_CONFIG_DIR="$_APM_TEST_CONFIG_DIR"
 trap 'rm -rf "$_APM_TEST_CONFIG_DIR"' EXIT
 
+# Tests that check file creation/content use copy mode so they don't depend on ~/.agents/.
+export INSTALL_MODE="copy"
+
 ERRORS=0
 
 run_test() {

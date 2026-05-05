@@ -121,7 +121,8 @@ skills_db/
 Key points:
 - `apm` prefers `skills_db/<repo>/skills/<skill>/SKILL.md`
 - if no `skills/` folder exists, it falls back to `skills_db/<skill>/SKILL.md`
-- the canonical skill ID is the skill folder name that directly contains `SKILL.md`
+- the canonical skill ID is the folder name that directly contains `SKILL.md`
+- when a repo has multiple sub-skills, register the repo once in `skills_db` — all sub-skills are auto-discovered and installable by ID with no extra symlinks needed
 
 These databases are your source of truth.
 
