@@ -45,13 +45,27 @@ Positional shortcuts:
 
 ## Determine intent
 
-Identify two things from the user's request:
+Identify three things from the user's request:
 1. **Mode**: skill or agent?
 2. **Action**: install, remove, list, status, import, update, scan, find, validate, github?
+3. **Scope**: global or project-local? (skills installs only)
 
 If the user says "skill" or "skills" → use `-s` flag throughout.
 If the user says "agent" or "agents" → use `-a` flag throughout.
 If ambiguous → ask once, then proceed.
+
+**Scope detection for skills installs:**
+
+`apm` scope-detects from cwd — if a `.claude/` dir is present it installs project-local, otherwise global. This matches user intent *most* of the time, but not always. Before running install, resolve scope explicitly:
+
+| Context | Expected scope | Flag to use |
+|---|---|---|
+| User is in a project dir and says "install for this project" | project-local | *(none, let apm detect)* |
+| User is in a project dir but says "install globally" or "for all projects" | global | `--global` |
+| User is in home dir / no project context | global | *(none, let apm detect)* |
+| Ambiguous — in a project dir, intent unclear | **ask** | — |
+
+When the user is inside a project directory and their intent isn't explicit, ask: *"Install globally (available in all projects) or just for this project?"* Then apply `--global` or omit it accordingly.
 
 ---
 
@@ -82,12 +96,15 @@ apm -s find <name>
 
 **Step 2 — install:**
 ```bash
-# Global (default):
-apm -s install <skill-id>
+# Global (explicit — use when in a project dir to avoid project-scoped install):
+apm -s --global install <skill-id>
 
-# Project-local (creates .claude/skills/ or .agents/skills/ if it doesn't exist):
+# Project-local (explicit):
 apm -s --cwd /absolute/path install <skill-id>
 apm -s --cwd . install <skill-id>
+
+# Scope auto-detected from cwd (safe only when intent is unambiguous):
+apm -s install <skill-id>
 
 # Multiple at once:
 apm -s install <id1> <id2> <id3>
