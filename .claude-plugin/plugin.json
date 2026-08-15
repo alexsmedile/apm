@@ -1,0 +1,21 @@
+{
+  "name": "apm",
+  "displayName": "apm",
+  "version": "0.2.0",
+  "description": "Agent Package Manager — install, remove, scan, and repair AI agents and skills across harnesses.",
+  "author": {
+    "name": "Alessandro Smedile"
+  },
+  "homepage": "https://github.com/alexsmedile/apm",
+  "repository": "https://github.com/alexsmedile/apm",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "agents",
+    "package-manager",
+    "symlink",
+    "devtools",
+    "claude-code"
+  ],
+  "skills": "./skills/"
+}

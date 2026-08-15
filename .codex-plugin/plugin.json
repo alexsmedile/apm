@@ -1,0 +1,20 @@
+{
+  "name": "apm",
+  "version": "0.2.0",
+  "description": "Agent Package Manager — install, remove, scan, and repair AI agents and skills across harnesses.",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "apm",
+    "shortDescription": "Install, remove, scan, and repair AI agents and skills across harnesses.",
+    "longDescription": "apm is the Agent Package Manager: one library of skills and agents, installed into whichever harness you use. Install or remove a skill, list what is installed, scan for duplicates, register tool-embedded skills, sync an agent to GitHub, and repair broken symlinks.",
+    "developerName": "Alessandro Smedile",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/alexsmedile/apm",
+    "defaultPrompt": [
+      "What skills are installed?",
+      "Install the tidy-project skill.",
+      "Repair my broken skill symlinks."
+    ]
+  }
+}
