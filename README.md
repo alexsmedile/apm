@@ -232,6 +232,24 @@ apm github push --all        # push everything
 apm github pull agent-mentor   # pull one agent (staged by default)
 ```
 
+### Private and team repos
+
+Both modes work with private repos — apm shells out to `git`, so it uses
+whatever credentials git already has. Authenticate once per machine:
+
+```bash
+gh auth login
+gh auth setup-git    # routes HTTPS github.com clones through your gh token
+```
+
+That is the whole setup. A private agent library then syncs exactly like a
+public one, and access is managed by GitHub repo or org-team permissions
+rather than by apm.
+
+> Without `gh auth setup-git`, a private repo fails as if it does not exist
+> rather than as a permission error — easy to misread as a typo in the owner
+> or repo name.
+
 ## Commands
 
 | Command | Description |
