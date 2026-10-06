@@ -32,5 +32,7 @@ _backups/
 # Logs
 *.log
 
-# Personal notes
-TODO.md
+
+# OPF local companions
+*.local.*
+.octopus.local/
